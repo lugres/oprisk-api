@@ -1,0 +1,2 @@
+-- test_data.sql
+-- Seed data for initial schema (will be done manually)

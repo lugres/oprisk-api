@@ -1,2 +1,4 @@
 Django>=5.2.6,<5.3
 djangorestframework>=3.16.1,<3.17
+psycopg[c]>=3.2.10,<3.3
+ 
