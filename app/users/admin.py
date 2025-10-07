@@ -45,9 +45,42 @@ class UserAdmin(BaseUserAdmin):
                 )
             },
         ),
-        (_("Important dates"), {"fields": ("last_login",)}),
+        (
+            _("Important dates"),
+            {
+                "fields": (
+                    "last_login",
+                    "date_joined",
+                )
+            },
+        ),
     )
-    readonly_fields = ["last_login", "external_id", "external_source"]
+    readonly_fields = [
+        "last_login",
+        "date_joined",
+        "external_id",
+        "external_source",
+    ]
+    add_fieldsets = (
+        (
+            None,
+            {
+                "classes": ("wide",),
+                "fields": (
+                    "email",
+                    "password1",
+                    "password2",
+                    "full_name",
+                    "business_unit",
+                    "role",
+                    "manager",
+                    "is_active",
+                    "is_staff",
+                    "is_superuser",
+                ),
+            },
+        ),
+    )
 
 
 admin.site.register(User, UserAdmin)
