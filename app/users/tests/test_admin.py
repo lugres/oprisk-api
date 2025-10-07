@@ -31,3 +31,10 @@ class AdminSiteCustomUserModelTests(TestCase):
 
         self.assertContains(res, self.user.full_name)
         self.assertContains(res, self.user.email)
+
+    def test_edit_user_page(self):
+        """Test that the edit user page works correctly."""
+        url = reverse("admin:users_user_change", args=[self.user.id])
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, 200)
