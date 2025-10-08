@@ -1,3 +1,10 @@
-from django.contrib import admin  # noqa
+"""
+Django admin customization for reference/central taxonomy tables.
+"""
 
-# Register your models here.
+from django.contrib import admin
+
+from references import models
+
+admin.site.register(models.Role)
+admin.site.register(models.BusinessUnit)
