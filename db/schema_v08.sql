@@ -29,12 +29,14 @@
 -- Reference Tables
 -- =========================
 
-CREATE TABLE roles (
+-- +
+CREATE TABLE roles (    
     id SERIAL PRIMARY KEY,
     name VARCHAR(50) UNIQUE NOT NULL,
     description TEXT
 );
 
+-- +
 CREATE TABLE basel_event_types (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -43,6 +45,7 @@ CREATE TABLE basel_event_types (
     -- 7 top-level Basel categories (e.g. Internal Fraud, External Fraud, etc.)
 );
 
+-- +
 -- simple event types (4 + other) are needed for early notifications based on routes
 -- selected by employee/manager in UI, mapped to basel types by ORM at validation
 -- a concept, not tested with sample data and queries
@@ -54,6 +57,7 @@ CREATE TABLE simplified_event_types_ref (
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
+-- +
 -- eases mapping job for orm, basel types are needed for auditors & regulators
 CREATE TABLE simplified_to_basel_event_map (
     id SERIAL PRIMARY KEY,
@@ -63,7 +67,7 @@ CREATE TABLE simplified_to_basel_event_map (
     UNIQUE (simplified_id, basel_id)  -- avoid duplicate mappings
 );
 
-
+-- +
 CREATE TABLE basel_business_lines (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -92,12 +96,14 @@ CREATE TABLE loss_causes (
     description TEXT
 );
 
+-- +
 CREATE TABLE business_units (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     parent_id INT REFERENCES business_units(id) ON DELETE SET NULL
 );
 
+-- +
 CREATE TABLE business_processes (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -105,6 +111,7 @@ CREATE TABLE business_processes (
     business_unit_id INT REFERENCES business_units(id) ON DELETE SET NULL
 );
 
+-- +
 CREATE TABLE products (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,

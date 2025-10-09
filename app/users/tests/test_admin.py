@@ -41,7 +41,7 @@ class AdminSiteCustomUserModelTests(TestCase):
         self.assertContains(res, self.user.email)
 
     def test_edit_user_page_displays_custom_fields(self):
-        """Test that the edit user page works correctly and shows custom fields."""
+        """Test that edit user page works correctly and shows custom fields."""
         url = reverse("admin:users_user_change", args=[self.user.id])
         res = self.client.get(url)
 
@@ -89,14 +89,3 @@ class AdminSiteCustomUserModelTests(TestCase):
         self.assertEqual(self.user.email, "newemail@example.com")
         # Assert that the readonly field was NOT updated
         self.assertEqual(self.user.date_joined, original_date_joined)
-
-    # keeping these simple tests for references app here so far
-    def test_references_changelist_pages_load(self):
-        """Test that the changelist pages for reference models load correctly."""
-        urls = [
-            reverse("admin:references_role_changelist"),
-            reverse("admin:references_businessunit_changelist"),
-        ]
-        for url in urls:
-            res = self.client.get(url)
-            self.assertEqual(res.status_code, 200)
