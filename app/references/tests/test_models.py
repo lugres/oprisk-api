@@ -1,7 +1,6 @@
 """
 Simple "smoke tests" to ensure the models can be created and
 have a sensible string representation.
-Simple tests for admin interface are in the users app, test_admin.py
 """
 
 from django.test import TestCase

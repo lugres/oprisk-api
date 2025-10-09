@@ -40,6 +40,9 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Third-party addons
+    "rest_framework",
+    "drf_spectacular",
     # Local apps
     "core",
     "users",
@@ -133,3 +136,16 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # Custom user model
 AUTH_USER_MODEL = "users.User"
+
+# Django REST Framework settings (including documentation)
+REST_FRAMEWORK = {
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Oprisk API",
+    "DESCRIPTION": "An API for a custom Operational Risk Management platform",
+    "VERSION": "0.0.8",
+    # "SERVE_INCLUDE_SCHEMA": False,
+    # OTHER SETTINGS
+}
