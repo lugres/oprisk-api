@@ -80,7 +80,7 @@ class PublicUserApiTests(TestCase):
         )
         self.assertFalse(user_exists)
 
-    def create_token_for_user(self):
+    def test_create_token_for_user(self):
         """Test generates token for valid user credentials."""
         # creating a user in the app
         user_details = {
