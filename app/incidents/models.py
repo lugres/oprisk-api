@@ -5,6 +5,8 @@ Data models for the incident domain.
 from django.db import models
 from django.conf import settings
 
+
+from core.models import TimestampedModel, OwnedModel
 from references.models import (
     Role,
     BusinessUnit,
@@ -78,7 +80,7 @@ class IncidentStatusRef(models.Model):
         return self.name
 
 
-class Incident(models.Model):
+class Incident(TimestampedModel, OwnedModel):
     """Represent operational risk events - core business domain."""
 
     title = models.CharField(max_length=255)
@@ -86,10 +88,6 @@ class Incident(models.Model):
     start_time = models.DateTimeField(blank=True, null=True)
     end_time = models.DateTimeField(blank=True, null=True)
     discovered_at = models.DateTimeField(blank=True, null=True)
-
-    # Use auto_now_add for creation and auto_now for updates
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)  # Recommended addition
 
     # Foreign Keys with sensible on_delete and related_name
     business_unit = models.ForeignKey(
@@ -115,11 +113,6 @@ class Incident(models.Model):
     # PROTECT is safer for critical links than SET_NULL or CASCADE
     status = models.ForeignKey(
         IncidentStatusRef, on_delete=models.PROTECT, related_name="incidents"
-    )
-    reported_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name="reported_incidents",
     )
 
     assigned_to = models.ForeignKey(
@@ -195,10 +188,10 @@ class IncidentRoutingRule(models.Model):
     """Simple custom routing for incidents based on JSON predicates."""
 
     route_to_role = models.ForeignKey(
-        Role, on_delete=models.SET_NULL, blank=True, null=True
+        Role, on_delete=models.CASCADE, blank=True, null=True
     )
     route_to_bu = models.ForeignKey(
-        BusinessUnit, on_delete=models.SET_NULL, blank=True, null=True
+        BusinessUnit, on_delete=models.CASCADE, blank=True, null=True
     )
     predicate = models.JSONField()
     priority = models.IntegerField(default=100)
