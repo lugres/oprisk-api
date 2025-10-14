@@ -90,24 +90,22 @@ class Incident(TimestampedModel, OwnedModel):
     discovered_at = models.DateTimeField(blank=True, null=True)
 
     # Foreign Keys with sensible on_delete and related_name
-    business_unit = models.ForeignKey(
-        BusinessUnit, on_delete=models.SET_NULL, blank=True, null=True
-    )
+    business_unit = models.ForeignKey(BusinessUnit, on_delete=models.PROTECT)
     # BusinessProcess will live in the 'references' app as well
     business_process = models.ForeignKey(
         BusinessProcess,
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         blank=True,
         null=True,
     )
     product = models.ForeignKey(
-        Product, on_delete=models.SET_NULL, blank=True, null=True
+        Product, on_delete=models.PROTECT, blank=True, null=True
     )
     basel_event_type = models.ForeignKey(
-        BaselEventType, on_delete=models.SET_NULL, blank=True, null=True
+        BaselEventType, on_delete=models.PROTECT, blank=True, null=True
     )
     basel_business_line = models.ForeignKey(
-        BaselBusinessLine, on_delete=models.SET_NULL, blank=True, null=True
+        BaselBusinessLine, on_delete=models.PROTECT, blank=True, null=True
     )
 
     # PROTECT is safer for critical links than SET_NULL or CASCADE
@@ -117,21 +115,21 @@ class Incident(TimestampedModel, OwnedModel):
 
     assigned_to = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         blank=True,
         null=True,
         related_name="assigned_incidents",
     )
     validated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         blank=True,
         null=True,
         related_name="validated_incidents",
     )
     closed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         blank=True,
         null=True,
         related_name="closed_incidents",
@@ -149,7 +147,7 @@ class Incident(TimestampedModel, OwnedModel):
     deleted_at = models.DateTimeField(blank=True, null=True)
     deleted_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         blank=True,
         null=True,
         related_name="deleted_incidents",
@@ -181,7 +179,7 @@ class IncidentCause(models.Model):
     loss_cause = models.ForeignKey(LossCause, on_delete=models.CASCADE)
 
     class Meta:
-        unique_together = ("incident", "loss_cause")
+        unique_together = (("incident", "loss_cause"),)
 
 
 class IncidentRoutingRule(models.Model):
@@ -210,7 +208,7 @@ class IncidentRequiredField(models.Model):
     required = models.BooleanField(default=False)
 
     class Meta:
-        unique_together = ("status", "field_name")
+        unique_together = (("status", "field_name"),)
 
 
 class SlaConfig(models.Model):

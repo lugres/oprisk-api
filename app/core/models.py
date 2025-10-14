@@ -17,9 +17,7 @@ class TimestampedModel(models.Model):
 class OwnedModel(models.Model):
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
         related_name="%(class)s_created",
     )
 
