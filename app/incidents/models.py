@@ -90,7 +90,12 @@ class Incident(TimestampedModel, OwnedModel):
     discovered_at = models.DateTimeField(blank=True, null=True)
 
     # Foreign Keys with sensible on_delete and related_name
-    business_unit = models.ForeignKey(BusinessUnit, on_delete=models.PROTECT)
+    business_unit = models.ForeignKey(
+        BusinessUnit,
+        on_delete=models.PROTECT,
+        blank=True,
+        null=True,
+    )
     # BusinessProcess will live in the 'references' app as well
     business_process = models.ForeignKey(
         BusinessProcess,
@@ -166,6 +171,11 @@ class Incident(TimestampedModel, OwnedModel):
     currency_code = models.CharField(max_length=3, blank=True, null=True)
     near_miss = models.BooleanField(default=False)
     notes = models.TextField(blank=True, null=True)
+
+    # to access related objects  via the ORM.
+    causes = models.ManyToManyField(
+        LossCause, through="IncidentCause", related_name="incidents"
+    )
 
     def __str__(self):
         return self.title

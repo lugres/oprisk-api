@@ -4,6 +4,8 @@ Tests for the models in the incidents app.
 
 from django.test import TestCase
 from django.contrib.auth import get_user_model
+from django.db.utils import IntegrityError
+from time import sleep
 
 from references.models import BusinessUnit, BaselEventType
 from incidents.models import (
@@ -11,6 +13,7 @@ from incidents.models import (
     IncidentStatusRef,
     LossCause,
     SimplifiedEventTypeRef,
+    IncidentCause,
 )
 
 User = get_user_model()
@@ -36,20 +39,20 @@ class IncidentModelTests(TestCase):
         incident = Incident.objects.create(
             title="Suspicious Transaction",
             description="A suspicious transaction was reported on account XY.",
-            reported_by=self.reporter,
+            created_by=self.reporter,
             status=self.status_draft,
             business_unit=self.bu,
         )
         self.assertEqual(str(incident), incident.title)
-        self.assertEqual(incident.reported_by.email, self.reporter.email)
-        self.assertEqual(incident.status.code, self.status_draft.code)
+        self.assertEqual(incident.created_by, self.reporter)
+        self.assertEqual(incident.status, self.status_draft)
 
     def test_incident_default_values(self):
         """Test the default values for fields (near_miss and fin amounts)."""
         incident = Incident.objects.create(
             title="Near Miss Event",
             description="A potential fraud was stopped before loss occurred.",
-            reported_by=self.reporter,
+            created_by=self.reporter,
             status=self.status_draft,
         )
         self.assertFalse(incident.near_miss)
@@ -65,6 +68,53 @@ class IncidentModelTests(TestCase):
         self.assertEqual(str(loss_cause), "Phishing Attack")
         self.assertEqual(str(simplified_event), "IT/Cyber")
 
+    def test_incident_cause_relationship(self):
+        """Test linking a cause to an incident via the through model."""
+        incident = Incident.objects.create(
+            title="Test",
+            created_by=self.reporter,
+            status=self.status_draft,
+            business_unit=self.bu,
+        )
+        cause = LossCause.objects.create(name="Human Error")
+        IncidentCause.objects.create(incident=incident, loss_cause=cause)
+
+        self.assertEqual(incident.causes.count(), 1)
+        self.assertEqual(incident.causes.first(), cause)
+
+    def test_incident_cause_unique_together_constraint(self):
+        """Test that a cause can only be linked to an incident once."""
+        incident = Incident.objects.create(
+            title="Test",
+            created_by=self.reporter,
+            status=self.status_draft,
+            business_unit=self.bu,
+        )
+        cause = LossCause.objects.create(name="System Failure")
+        IncidentCause.objects.create(incident=incident, loss_cause=cause)
+
+        with self.assertRaises(IntegrityError):
+            IncidentCause.objects.create(incident=incident, loss_cause=cause)
+
+    def test_timestamped_model_fields(self):
+        """Test that created_at and updated_at are set correctly."""
+        incident = Incident.objects.create(
+            title="Timestamp Test",
+            created_by=self.reporter,
+            status=self.status_draft,
+            business_unit=self.bu,
+        )
+        self.assertIsNotNone(incident.created_at)
+        self.assertIsNotNone(incident.updated_at)
+
+        original_updated_at = incident.updated_at
+        sleep(0.01)  # Ensure the timestamp will be different
+        incident.title = "Updated Timestamp Test"
+        incident.save()
+        incident.refresh_from_db()
+
+        self.assertGreater(incident.updated_at, original_updated_at)
+
     # Placeholder test for future business logic on the model
     def test_calculate_net_loss(self):
         """
@@ -74,7 +124,7 @@ class IncidentModelTests(TestCase):
         incident = Incident.objects.create(
             title="Test Net Loss",
             description="An incident with financial impact.",
-            reported_by=self.reporter,
+            created_by=self.reporter,
             status=self.status_draft,
             gross_loss_amount=1000.00,
             recovery_amount=250.00,
