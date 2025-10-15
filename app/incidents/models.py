@@ -113,6 +113,15 @@ class Incident(TimestampedModel, OwnedModel):
         BaselBusinessLine, on_delete=models.PROTECT, blank=True, null=True
     )
 
+    # NEW: To store the user's initial choice of simplified event type.
+    simplified_event_type = models.ForeignKey(
+        SimplifiedEventTypeRef,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        help_text="Simplified event type chosen by the employee in UI.",
+    )
+
     # PROTECT is safer for critical links than SET_NULL or CASCADE
     status = models.ForeignKey(
         IncidentStatusRef, on_delete=models.PROTECT, related_name="incidents"
