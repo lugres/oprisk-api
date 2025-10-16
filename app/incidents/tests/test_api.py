@@ -68,8 +68,8 @@ class PrivateIncidentApiTests(TestCase):
 
     def test_retrieve_incidents(self):
         """Test retrieving a list of incidents."""
-        create_incident(user=self.user)
-        create_incident(user=self.user)
+        create_incident(user=self.user, status=self.status_draft)
+        create_incident(user=self.user, status=self.status_pending)
 
         res = self.client.get(INCIDENTS_URL)
 
@@ -85,8 +85,8 @@ class PrivateIncidentApiTests(TestCase):
             email="other@example.com",
             password="otherpsw123",
         )
-        create_incident(user=other_user)
-        create_incident(user=self.user)
+        create_incident(user=other_user, status=self.status_draft)
+        create_incident(user=self.user, status=self.status_pending)
 
         res = self.client.get(INCIDENTS_URL)
 
