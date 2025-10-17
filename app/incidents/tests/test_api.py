@@ -41,6 +41,11 @@ def create_incident(user, **params):
     return incident
 
 
+def create_user(**params):
+    """Create and return a new user."""
+    return get_user_model().objects.create_user(**params)
+
+
 class PublicIncidentApiTests(TestCase):
     """Test unauthenticated API requests."""
 
@@ -59,11 +64,7 @@ class PrivateIncidentApiTests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        self.user = get_user_model().objects.create_user(
-            email="test@example.com",
-            password="testpass123",
-            full_name="Test User",
-        )
+        self.user = create_user(email="test@example.com", password="testp123")
 
         self.client.force_authenticate(user=self.user)
 
@@ -89,10 +90,7 @@ class PrivateIncidentApiTests(TestCase):
 
     def test_incidents_list_limited_to_user(self):
         """Test list of incidents is limited to authenticated user only."""
-        other_user = get_user_model().objects.create_user(
-            email="other@example.com",
-            password="otherpsw123",
-        )
+        other_user = create_user(email="other@example.com", password="test123")
         create_incident(user=other_user, status=self.status_draft)
         create_incident(user=self.user, status=self.status_pending)
 
@@ -172,3 +170,74 @@ class PrivateIncidentApiTests(TestCase):
         self.assertEqual(incident.title, payload["title"])
         self.assertEqual(incident.status.id, payload["status"])
         self.assertEqual(incident.created_by, self.user)
+
+    def test_partial_update_incident(self):
+        """Test partial update of an incident with PATCH."""
+        original_description = "Details on incident"
+        incident = create_incident(
+            user=self.user,
+            status=self.status_draft,
+            title="Sample incident title",
+            description=original_description,
+        )
+
+        payload = {"title": "New incident title"}
+        url = detail_url(incident.id)
+        res = self.client.patch(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        incident.refresh_from_db()
+        self.assertEqual(incident.title, payload["title"])
+        self.assertEqual(incident.description, original_description)
+        self.assertEqual(incident.created_by, self.user)
+
+    def test_full_update_incident(self):
+        """Test fully updating an incident with PUT."""
+        incident = create_incident(user=self.user, status=self.status_draft)
+        payload = {
+            "title": "Full New Title",
+            "description": "Full new description.",
+            "status": self.status_pending.id,
+        }
+        url = detail_url(incident.id)
+        res = self.client.put(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        incident.refresh_from_db()
+        self.assertEqual(incident.title, payload["title"])
+        self.assertEqual(incident.description, payload["description"])
+        self.assertEqual(incident.status.id, payload["status"])
+        self.assertEqual(incident.created_by, self.user)
+
+    def test_update_existent_incident_user_returns_error(self):
+        """Test changing the incident's user results in an error."""
+        new_user = create_user(email="user2@example.com", password="tstpsw12")
+        incident = create_incident(user=self.user, status=self.status_draft)
+
+        payload = {"user": new_user.id}
+        url = detail_url(incident.id)
+        self.client.patch(url, payload)
+
+        incident.refresh_from_db()
+        self.assertEqual(incident.created_by, self.user)
+
+    def test_delete_incident(self):
+        """Test deleting an incident is successful."""
+        incident = create_incident(user=self.user, status=self.status_draft)
+
+        url = detail_url(incident.id)
+        res = self.client.delete(url)
+
+        self.assertEqual(res.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Incident.objects.filter(id=incident.id).exists())
+
+    def test_delete_other_users_incident_error(self):
+        """Test trying to delete another user's incident returns an error."""
+        new_user = create_user(email="user2@example.com", password="tstpsw12")
+        incident = create_incident(user=new_user, status=self.status_draft)
+
+        url = detail_url(incident.id)
+        res = self.client.delete(url)
+
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(Incident.objects.filter(id=incident.id).exists())
