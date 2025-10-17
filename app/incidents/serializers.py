@@ -29,5 +29,18 @@ class IncidentSerializer(serializers.ModelSerializer):
             "status",
             "gross_loss_amount",
             "currency_code",
+            "created_at",
         ]
         read_only_fields = ["id"]
+
+
+class IncidentDetailSerializer(IncidentSerializer):
+    """Serializer for incident detail view."""
+
+    class Meta(IncidentSerializer.Meta):
+        fields = IncidentSerializer.Meta.fields + [
+            "start_time",
+            "end_time",
+            "business_unit",
+            "simplified_event_type",
+        ]

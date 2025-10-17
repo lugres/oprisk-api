@@ -14,7 +14,7 @@ from .filters import IncidentFilter
 class IncidentsViewSet(viewsets.ModelViewSet):
     """View for managing incidents APIs."""
 
-    serializer_class = serializers.IncidentSerializer
+    serializer_class = serializers.IncidentDetailSerializer
     queryset = Incident.objects.all()
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -25,3 +25,10 @@ class IncidentsViewSet(viewsets.ModelViewSet):
         return self.queryset.filter(created_by=self.request.user).order_by(
             "-id"
         )
+
+    def get_serializer_class(self):
+        """Return the serializer class for request."""
+        if self.action == "list":
+            return serializers.IncidentSerializer
+
+        return self.serializer_class
