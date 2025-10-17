@@ -13,10 +13,18 @@ from rest_framework.test import APIClient
 
 from incidents.models import Incident, IncidentStatusRef
 
-from incidents.serializers import IncidentSerializer
+from incidents.serializers import (
+    IncidentSerializer,
+    IncidentDetailSerializer,
+)
 
 
 INCIDENTS_URL = reverse("incidents:incident-list")
+
+
+def detail_url(incident_id):
+    """Create and return an incident detail URL."""
+    return reverse("incidents:incident-detail", args=[incident_id])
 
 
 def create_incident(user, **params):
@@ -137,3 +145,13 @@ class PrivateIncidentApiTests(TestCase):
         self.assertEqual(res_true.data[0]["id"], incident1.id)
         self.assertEqual(len(res_false.data), 1)
         self.assertEqual(res_false.data[0]["id"], incident2.id)
+
+    def test_get_incident_detail(self):
+        """Test get incident detail."""
+        incident = create_incident(user=self.user, status=self.status_draft)
+
+        url = detail_url(incident.id)
+        res = self.client.get(url)
+
+        serializer = IncidentDetailSerializer(incident)
+        self.assertEqual(res.data, serializer.data)
