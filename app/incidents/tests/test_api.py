@@ -155,3 +155,20 @@ class PrivateIncidentApiTests(TestCase):
 
         serializer = IncidentDetailSerializer(incident)
         self.assertEqual(res.data, serializer.data)
+
+    def test_create_incident(self):
+        """Test creating an incident via API endpoint."""
+        payload = {
+            "title": "Test incident title",
+            "description": "Test description",
+            "gross_loss_amount": Decimal("199.99"),
+            "currency_code": "EUR",
+            "status": self.status_draft,
+        }
+        res = self.client.post(INCIDENTS_URL, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        incident = Incident.objects.get(id=res.data["id"])
+        for k, v in payload.items():
+            self.assertEqual(getattr(incident, k), v)
+        self.assertEqual(incident.created_by, self.user)
