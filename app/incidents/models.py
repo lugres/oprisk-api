@@ -178,7 +178,9 @@ class Incident(TimestampedModel, OwnedModel):
         max_digits=18, decimal_places=2, blank=True, null=True
     )
     currency_code = models.CharField(max_length=3, blank=True, null=True)
-    near_miss = models.BooleanField(default=False)
+    near_miss = models.BooleanField(
+        default=False, help_text="Near miss: True/False"
+    )
     notes = models.TextField(blank=True, null=True)
 
     # to access related objects  via the ORM.
