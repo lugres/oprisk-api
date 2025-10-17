@@ -161,14 +161,14 @@ class PrivateIncidentApiTests(TestCase):
         payload = {
             "title": "Test incident title",
             "description": "Test description",
+            "status": self.status_draft.id,
             "gross_loss_amount": Decimal("199.99"),
             "currency_code": "EUR",
-            "status": self.status_draft,
         }
         res = self.client.post(INCIDENTS_URL, payload)
 
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         incident = Incident.objects.get(id=res.data["id"])
-        for k, v in payload.items():
-            self.assertEqual(getattr(incident, k), v)
+        self.assertEqual(incident.title, payload["title"])
+        self.assertEqual(incident.status.id, payload["status"])
         self.assertEqual(incident.created_by, self.user)

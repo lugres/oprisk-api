@@ -37,10 +37,16 @@ class IncidentSerializer(serializers.ModelSerializer):
 class IncidentDetailSerializer(IncidentSerializer):
     """Serializer for incident detail view."""
 
+    status = serializers.PrimaryKeyRelatedField(
+        queryset=IncidentStatusRef.objects.all()
+    )
+
     class Meta(IncidentSerializer.Meta):
         fields = IncidentSerializer.Meta.fields + [
             "start_time",
             "end_time",
             "business_unit",
             "simplified_event_type",
+            "recovery_amount",
+            "net_loss_amount",
         ]
