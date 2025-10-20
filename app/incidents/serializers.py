@@ -68,6 +68,7 @@ class IncidentCreateUpdateSerializer(serializers.ModelSerializer):
         model = Incident
         # List only the fields an employee can create/edit initially.
         fields = [
+            "id",
             "title",
             "description",
             "status",
@@ -77,3 +78,4 @@ class IncidentCreateUpdateSerializer(serializers.ModelSerializer):
             "currency_code",
             "near_miss",
         ]
+        read_only_fields = ["id"]

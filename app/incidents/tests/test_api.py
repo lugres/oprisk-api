@@ -14,7 +14,7 @@ from rest_framework.test import APIClient
 from incidents.models import Incident, IncidentStatusRef
 
 from incidents.serializers import (
-    IncidentSerializer,
+    IncidentListSerializer,
     IncidentDetailSerializer,
 )
 
@@ -83,7 +83,7 @@ class PrivateIncidentApiTests(TestCase):
         res = self.client.get(INCIDENTS_URL)
 
         incidents = Incident.objects.all().order_by("-id")
-        serializer = IncidentSerializer(incidents, many=True)
+        serializer = IncidentListSerializer(incidents, many=True)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data, serializer.data)
@@ -97,7 +97,7 @@ class PrivateIncidentApiTests(TestCase):
         res = self.client.get(INCIDENTS_URL)
 
         incidents = Incident.objects.filter(created_by=self.user)
-        serializer = IncidentSerializer(incidents, many=True)
+        serializer = IncidentListSerializer(incidents, many=True)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(len(res.data), 1)
@@ -122,7 +122,7 @@ class PrivateIncidentApiTests(TestCase):
 
         # Filter for DRAFT incidents
         res = self.client.get(INCIDENTS_URL, {"status__code": "DRAFT"})
-        serializer_draft = IncidentSerializer(incident_draft)
+        serializer_draft = IncidentListSerializer(incident_draft)
 
         self.assertEqual(len(res.data), 1)
         self.assertEqual(res.data[0]["id"], serializer_draft.data["id"])
