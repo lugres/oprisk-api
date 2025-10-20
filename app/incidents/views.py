@@ -29,7 +29,9 @@ class IncidentsViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         """Return the serializer class for request."""
         if self.action == "list":
-            return serializers.IncidentSerializer
+            return serializers.IncidentListSerializer
+        if self.action in ["create", "update", "partial_update"]:
+            return serializers.IncidentCreateUpdateSerializer
 
         return self.serializer_class
 

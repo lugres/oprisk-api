@@ -56,3 +56,11 @@ class AuthTokenSerializer(serializers.Serializer):
 
         attrs["user"] = user
         return attrs
+
+
+class UserNestedSerializer(serializers.ModelSerializer):
+    """A lightweight serializer for displaying user info."""
+
+    class Meta:
+        model = get_user_model()
+        fields = ["id", "full_name", "email"]
