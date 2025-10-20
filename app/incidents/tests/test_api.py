@@ -19,7 +19,8 @@ from incidents.serializers import (
 )
 
 
-INCIDENTS_URL = reverse("incidents:incident-list")
+INCIDENTS_LIST_URL = reverse("incidents:incident-list")
+# INCIDENTS_CREATE_URL = reverse("incidents:incident-create")
 
 
 def detail_url(incident_id):
@@ -54,7 +55,7 @@ class PublicIncidentApiTests(TestCase):
 
     def test_auth_required(self):
         """Test auth is required to call API."""
-        res = self.client.get(INCIDENTS_URL)
+        res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_401_UNAUTHORIZED)
 
@@ -80,7 +81,7 @@ class PrivateIncidentApiTests(TestCase):
         create_incident(user=self.user, status=self.status_draft)
         create_incident(user=self.user, status=self.status_pending)
 
-        res = self.client.get(INCIDENTS_URL)
+        res = self.client.get(INCIDENTS_LIST_URL)
 
         incidents = Incident.objects.all().order_by("-id")
         serializer = IncidentListSerializer(incidents, many=True)
@@ -94,7 +95,7 @@ class PrivateIncidentApiTests(TestCase):
         create_incident(user=other_user, status=self.status_draft)
         create_incident(user=self.user, status=self.status_pending)
 
-        res = self.client.get(INCIDENTS_URL)
+        res = self.client.get(INCIDENTS_LIST_URL)
 
         incidents = Incident.objects.filter(created_by=self.user)
         serializer = IncidentListSerializer(incidents, many=True)
@@ -108,7 +109,7 @@ class PrivateIncidentApiTests(TestCase):
         incident1 = create_incident(user=self.user, status=self.status_draft)
         incident2 = create_incident(user=self.user, status=self.status_draft)
 
-        res = self.client.get(INCIDENTS_URL)
+        res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.data[0]["id"], incident2.id)
         self.assertEqual(res.data[1]["id"], incident1.id)
@@ -121,7 +122,7 @@ class PrivateIncidentApiTests(TestCase):
         create_incident(user=self.user, status=self.status_pending)
 
         # Filter for DRAFT incidents
-        res = self.client.get(INCIDENTS_URL, {"status__code": "DRAFT"})
+        res = self.client.get(INCIDENTS_LIST_URL, {"status__code": "DRAFT"})
         serializer_draft = IncidentListSerializer(incident_draft)
 
         self.assertEqual(len(res.data), 1)
@@ -136,8 +137,8 @@ class PrivateIncidentApiTests(TestCase):
             user=self.user, status=self.status_draft, near_miss=False
         )
 
-        res_true = self.client.get(INCIDENTS_URL, {"near_miss": "true"})
-        res_false = self.client.get(INCIDENTS_URL, {"near_miss": "false"})
+        res_true = self.client.get(INCIDENTS_LIST_URL, {"near_miss": "true"})
+        res_false = self.client.get(INCIDENTS_LIST_URL, {"near_miss": "false"})
 
         self.assertEqual(len(res_true.data), 1)
         self.assertEqual(res_true.data[0]["id"], incident1.id)
@@ -159,16 +160,16 @@ class PrivateIncidentApiTests(TestCase):
         payload = {
             "title": "Test incident title",
             "description": "Test description",
-            "status": self.status_draft.id,
+            # "status": self.status_draft.id,
             "gross_loss_amount": Decimal("199.99"),
             "currency_code": "EUR",
         }
-        res = self.client.post(INCIDENTS_URL, payload)
+        res = self.client.post(INCIDENTS_LIST_URL, payload)
 
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         incident = Incident.objects.get(id=res.data["id"])
         self.assertEqual(incident.title, payload["title"])
-        self.assertEqual(incident.status.id, payload["status"])
+        self.assertEqual(incident.status.code, self.status_draft.code)
         self.assertEqual(incident.created_by, self.user)
 
     def test_partial_update_incident(self):
