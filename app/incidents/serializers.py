@@ -83,10 +83,11 @@ class IncidentUpdateSerializer(serializers.ModelSerializer):
         fields = [
             "title",
             "description",
-            "status",  # added
+            # "status",  # added
             "business_unit",
             "simplified_event_type",
             "gross_loss_amount",
             "currency_code",
             "near_miss",
         ]
+        read_only_fields = ["status"]

@@ -198,7 +198,7 @@ class PrivateIncidentApiTests(TestCase):
         payload = {
             "title": "Full New Title",
             "description": "Full new description.",
-            "status": self.status_pending.id,
+            # "status": self.status_pending.id,
         }
         url = detail_url(incident.id)
         res = self.client.put(url, payload)
@@ -207,7 +207,7 @@ class PrivateIncidentApiTests(TestCase):
         incident.refresh_from_db()
         self.assertEqual(incident.title, payload["title"])
         self.assertEqual(incident.description, payload["description"])
-        self.assertEqual(incident.status.id, payload["status"])
+        # self.assertEqual(incident.status.id, payload["status"])
         self.assertEqual(incident.created_by, self.user)
 
     def test_update_existent_incident_user_returns_error(self):

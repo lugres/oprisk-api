@@ -21,7 +21,7 @@ def create_incident(*, user: User, **kwargs) -> Incident:
 
 
 def submit_incident(*, incident: Incident) -> Incident:
-    """Service function to handle the business logic of submitting an incident."""
+    """Service function to handle business logic of submitting an incident."""
     pending_status = IncidentStatusRef.objects.get(code="PENDING_REVIEW")
     incident.status = pending_status
 
