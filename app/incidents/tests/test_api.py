@@ -244,35 +244,35 @@ class PrivateIncidentApiTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(Incident.objects.filter(id=incident.id).exists())
 
-    # Transitions - submit
-    def test_submit_incident_action_success(self):
-        """Test the custom action to submit a DRAFT incident."""
-        incident = create_incident(user=self.user, status=self.status_draft)
-        url = reverse("incidents:incident-submit", args=[incident.id])
+    # Transitions - submit - old tests for initial endpoint, COMMENTED OUT
+    # def test_submit_incident_action_success(self):
+    #     """Test the custom action to submit a DRAFT incident."""
+    #     incident = create_incident(user=self.user, status=self.status_draft)
+    #     url = reverse("incidents:incident-submit", args=[incident.id])
 
-        res = self.client.post(url)
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
+    #     res = self.client.post(url)
+    #     self.assertEqual(res.status_code, status.HTTP_200_OK)
 
-        incident.refresh_from_db()
-        self.assertEqual(incident.status.code, "PENDING_REVIEW")
+    #     incident.refresh_from_db()
+    #     self.assertEqual(incident.status.code, "PENDING_REVIEW")
 
-    def test_submit_incident_wrong_status_fails(self):
-        """Test that submitting an incident not in DRAFT status fails."""
-        incident = create_incident(user=self.user, status=self.status_pending)
-        url = reverse("incidents:incident-submit", args=[incident.id])
+    # def test_submit_incident_wrong_status_fails(self):
+    #     """Test that submitting an incident not in DRAFT status fails."""
+    #     incident = create_incident(user=self.user,status=self.status_pending)
+    #     url = reverse("incidents:incident-submit", args=[incident.id])
 
-        res = self.client.post(url)
-        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+    #     res = self.client.post(url)
+    #     self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_submit_incident_not_owner_fails(self):
-        """Test that a user cannot submit an incident they did not create."""
-        new_user = create_user(email="user2@example.com", password="tstpsw12")
-        incident = create_incident(user=new_user, status=self.status_draft)
-        url = reverse("incidents:incident-submit", args=[incident.id])
+    # def test_submit_incident_not_owner_fails(self):
+    #     """Test that a user cannot submit an incident they did not create."""
+    #     new_user = create_user(email="user2@example.com", password="tstps12")
+    #     incident = create_incident(user=new_user, status=self.status_draft)
+    #     url = reverse("incidents:incident-submit", args=[incident.id])
 
-        res = self.client.post(url)
-        # This will fail with 404 because get_queryset already filters by user
-        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+    #     res = self.client.post(url)
+    #     # This will fail with 404 because get_queryset already filters by usr
+    #     self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
 
 class IncidentApiTransitionsPermissionsTests(TestCase):
@@ -288,11 +288,11 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.status_draft = IncidentStatusRef.objects.create(
             code="DRAFT", name="Draft"
         )
-        self.status_pending = IncidentStatusRef.objects.create(
-            code="PENDING_REVIEW", name="Pending"
+        self.status_pending_review = IncidentStatusRef.objects.create(
+            code="PENDING_REVIEW", name="Pending Manager Review"
         )
-        self.status_validation = IncidentStatusRef.objects.create(
-            code="PENDING_VALIDATION", name="Validation"
+        self.status_pending_validation = IncidentStatusRef.objects.create(
+            code="PENDING_VALIDATION", name="Pending Risk Validation"
         )
 
         # --- Create BUs ---
@@ -301,33 +301,33 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         # --- Create Users ---
         self.manager = create_user(
-            user="manager@example.com",
+            email="manager@example.com",
             password="testpsw123",
             role=self.role_mgr,
             business_unit=self.bu_retail,
         )
         self.employee1 = create_user(
-            user="emp1@example.com",
+            email="emp1@example.com",
             password="testpsw123",
             role=self.role_emp,
             business_unit=self.bu_retail,
             manager=self.manager,
         )
         self.employee2 = create_user(
-            user="emp2@example.com",
+            email="emp2@example.com",
             password="testpsw123",
             role=self.role_emp,
             business_unit=self.bu_retail,
             manager=self.manager,
         )
         self.risk_officer = create_user(
-            user="risk@example.com",
+            email="risk@example.com",
             password="testpsw123",
             role=self.role_risk,
             business_unit=self.bu_retail,
         )
         self.other_bu_emp = create_user(
-            user="other@example.com",
+            email="other@example.com",
             password="testpsw123",
             role=self.role_emp,
             business_unit=self.bu_corp,
@@ -342,7 +342,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         )
         self.incident_emp2 = create_incident(
             user=self.employee2,
-            status=self.status_pending,
+            status=self.status_pending_review,
             business_unit=self.bu_retail,
             title="Emp2 Incident",
         )
@@ -362,12 +362,12 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # --- Configure State Machine ---
         AllowedTransition.objects.create(
             from_status=self.status_draft,
-            to_status=self.status_pending,
+            to_status=self.status_pending_review,
             role=self.role_emp,
         )
         AllowedTransition.objects.create(
-            from_status=self.status_pending,
-            to_status=self.status_validation,
+            from_status=self.status_pending_review,
+            to_status=self.status_pending_validation,
             role=self.role_mgr,
         )
 
