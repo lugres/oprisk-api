@@ -6,6 +6,7 @@ Updates SLA details, evaluates custom routing rules, triggers notifications.
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 
 
 from .models import Incident, IncidentStatusRef, AllowedTransition
@@ -14,16 +15,37 @@ from .workflows import validate_transition
 User = get_user_model()
 
 
+# Default fallback rules based on core business logic
+DEFAULT_TRANSITIONS = {
+    "DRAFT": {
+        "PENDING_REVIEW": ["Employee", "Manager"]  # Allow creators to submit
+    },
+    "PENDING_REVIEW": {
+        "PENDING_VALIDATION": ["Manager"],  # Manager reviews/verifies
+        "DRAFT": ["Manager"],  # Manager can return to draft
+    },
+    "PENDING_VALIDATION": {
+        "VALIDATED": ["Risk Officer", "Group ORM"],  # ORM validates/authorizes
+        "PENDING_REVIEW": ["Risk Officer", "Group ORM"],  # ORM can return
+    },
+    "VALIDATED": {"CLOSED": ["Risk Officer", "Group ORM"]},  # ORM closes
+}
+
+
 # --- Business Rules Loading (Data-Driven) ---
 def _get_transition_rules() -> dict:
     """
     Fetches the state machine's rules from the database and builds the
-    Python dictionary needed by the Domain layer.
+    Python dictionary needed by the Domain layer. Falls back to default.
     """
     rules = {}
     transitions = AllowedTransition.objects.select_related(
         "from_status", "to_status", "role"
     ).all()
+
+    # Use the default if DB config table is empty
+    if not transitions:
+        return DEFAULT_TRANSITIONS
 
     for t in transitions:
         if t.from_status.code not in rules:
@@ -32,6 +54,24 @@ def _get_transition_rules() -> dict:
             rules[t.from_status.code][t.to_status.code] = []
         rules[t.from_status.code][t.to_status.code].append(t.role.name)
     return rules
+
+
+def _find_risk_officer(business_unit):
+    """
+    Finds a Risk Officer.
+    Priority 1: A Risk Officer in the same Business Unit.
+    Priority 2: Any Risk Officer in the system.
+    """
+    if business_unit:
+        # Q objects are used to build complex queries
+        risk_officer = User.objects.filter(
+            Q(role__name="Risk Officer") & Q(business_unit=business_unit)
+        ).first()
+        if risk_officer:
+            return risk_officer
+
+    # Fallback: find any Risk Officer
+    return User.objects.filter(role__name="Risk Officer").first()
 
 
 # --- Service Functions ---
@@ -69,7 +109,7 @@ def submit_incident(*, incident: Incident, user: User) -> Incident:
     # calculate_sla(incident)
     # check_routing_rules(incident)
 
-    incident.save()
+    incident.save(update_fields=["status", "assigned_to", "updated_at"])
     return incident
 
 
@@ -85,10 +125,12 @@ def review_incident(*, incident: Incident, user: User) -> Incident:
     )
 
     new_status = IncidentStatusRef.objects.get(code="PENDING_VALIDATION")
-    new_assigned_user = User.objects.get(role__name="Risk Officer")
+    new_assigned_user = _find_risk_officer(incident.business_unit)
     incident.status = new_status
-    # incident.validated_by = user
-    incident.assigned_to = new_assigned_user  # Clear previous assignment
+    incident.reviewed_by = user  # Log who reviewed it
+    incident.assigned_to = new_assigned_user  # Assign to the Risk Officer
 
-    incident.save(update_fields=["status", "assigned_to", "updated_at"])
+    incident.save(
+        update_fields=["status", "assigned_to", "reviewed_by", "updated_at"]
+    )
     return incident

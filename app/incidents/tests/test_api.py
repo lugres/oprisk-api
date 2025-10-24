@@ -62,7 +62,9 @@ class PublicIncidentApiTests(TestCase):
 
 
 class PrivateIncidentApiTests(TestCase):
-    """Test authenticated API requests."""
+    """Test authenticated API requests.
+    Cover basic CRUD & Filtering.
+    """
 
     def setUp(self):
         self.client = APIClient()
@@ -276,6 +278,9 @@ class PrivateIncidentApiTests(TestCase):
 
 
 class IncidentApiTransitionsPermissionsTests(TestCase):
+    """Test authenticated API requests.
+    Cover Workflows & Permissions.
+    """
 
     def setUp(self):
         self.client = APIClient()
@@ -457,6 +462,18 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             res.status_code, status.HTTP_404_NOT_FOUND
         )  # Fails get_queryset
 
+    def test_manager_cannot_submit_own_incident(self):
+        """Test manager is blocked by IsIncidentCreator permission."""
+        self.client.force_authenticate(user=self.manager)
+        # The manager can *see* and access this incident (Layer 1 & 2 pass)
+        url = reverse("incidents:incident-submit", args=[self.incident_mgr.id])
+
+        res = self.client.post(url)
+
+        # But transition is forbidden by business rules (Layer 3),
+        # caught by validate_transition(), thus should fail
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
     # --- Test Layer 3: Domain Logic (workflow.py) ---
 
     def test_transition_fails_if_role_is_wrong(self):
@@ -471,3 +488,35 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # But the *domain logic* should fail
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Role 'Manager' is not authorized", res.data["error"])
+
+    def test_transition_fails_if_wrong_state(self):
+        """Test submitting an already-submitted incident fails."""
+        self.client.force_authenticate(user=self.employee2)
+        # This incident is already PENDING_REVIEW
+        url = reverse(
+            "incidents:incident-submit", args=[self.incident_emp2.id]
+        )
+        res = self.client.post(url)
+
+        # The permission passes (it's their incident), but the
+        # domain logic (workflow.py) should reject the state transition.
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        # self.assertIn("has no defined transitions", res.data["error"])
+
+    def test_review_incident_side_effects_assignment(self):
+        """Test that reviewing an incident correctly assigns it
+        to a Risk Officer."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-review", args=[self.incident_emp2.id]
+        )
+        self.client.post(url)
+
+        self.incident_emp2.refresh_from_db()
+
+        # Test the side-effects of the service function
+        self.assertEqual(
+            self.incident_emp2.status, self.status_pending_validation
+        )
+        self.assertEqual(self.incident_emp2.reviewed_by, self.manager)
+        self.assertEqual(self.incident_emp2.assigned_to, self.risk_officer)

@@ -134,6 +134,14 @@ class Incident(TimestampedModel, OwnedModel):
         null=True,
         related_name="assigned_incidents",
     )
+    # added 23/10/2025 to track who performed 'review'
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,  # Or PROTECT
+        blank=True,
+        null=True,
+        related_name="reviewed_incidents",
+    )
     validated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
