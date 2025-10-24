@@ -12,8 +12,8 @@ from rest_framework.permissions import IsAuthenticated
 from incidents.models import Incident
 from incidents import serializers, services
 from .permissions import (
-    IsIncidentCreatorForSubmit,
-    IsIncidentManagerForReview,
+    IsIncidentCreator,
+    IsIncidentManager,
 )
 from .workflows import InvalidTransitionError
 from .filters import IncidentFilter
@@ -95,10 +95,10 @@ class IncidentsViewSet(viewsets.ModelViewSet):
     @action(
         detail=True,
         methods=["post"],
-        permission_classes=[IsAuthenticated, IsIncidentCreatorForSubmit],
+        permission_classes=[IsAuthenticated, IsIncidentCreator],
     )
     def submit(self, request, pk=None):
-        """Action to submit an incident from DRAFT to PENDING_REVIEW."""
+        """Action to submit an incident: DRAFT -> PENDING_REVIEW."""
         incident = self.get_object()
         try:
             updated_incident = services.submit_incident(
@@ -114,10 +114,10 @@ class IncidentsViewSet(viewsets.ModelViewSet):
     @action(
         detail=True,
         methods=["post"],
-        permission_classes=[IsAuthenticated, IsIncidentManagerForReview],
+        permission_classes=[IsAuthenticated, IsIncidentManager],
     )
     def review(self, request, pk=None):
-        """Review an incident from PENDING_REVIEW to PENDING_VALIDATION."""
+        """Action to review incident: PENDING_REVIEW -> PENDING_VALIDATION."""
         incident = self.get_object()
         try:
             updated_incident = services.review_incident(

@@ -5,39 +5,26 @@ Object-level permissions.
 from rest_framework import permissions
 
 
-# class CanSubmitIncident(permissions.BasePermission):
-#     """Permission to allow only the creator to submit a DRAFT incident."""
-
-#     message = "Only creator can submit an incident, and it must be in DRAFT."
-
-#     def has_object_permission(self, request, view, obj):
-#         return request.user == obj.created_by and obj.status.code == "DRAFT"
-
-
-class IsIncidentCreatorForSubmit(permissions.BasePermission):
+class IsIncidentCreator(permissions.BasePermission):
     """Object-level permission to only allow the incident creator."""
 
-    message = "Only creator can submit an incident, and it must be in DRAFT."
+    message = "Only the incident creator can submit an incident."
 
     def has_object_permission(self, request, view, obj):
-        return obj.created_by == request.user and obj.status.code == "DRAFT"
+        return obj.created_by == request.user
 
 
-class IsIncidentManagerForReview(permissions.BasePermission):
+class IsIncidentManager(permissions.BasePermission):
     """Object-level permission to only allow the creator's manager."""
 
     message = (
-        "Only manager can review an incident, and it must be"
-        " in PENDING_REVIEW."
+        "Only the manager of the incident creator can review an incident."
     )
 
     def has_object_permission(self, request, view, obj):
         if not obj.created_by:
             return False
-        return (
-            obj.created_by.manager == request.user
-            and obj.status.code == "PENDING_REVIEW"
-        )
+        return obj.created_by.manager == request.user
 
 
 class IsUserInRole(permissions.BasePermission):
