@@ -27,18 +27,32 @@ class IsIncidentManager(permissions.BasePermission):
         return obj.created_by.manager == request.user
 
 
-class IsUserInRole(permissions.BasePermission):
-    """
-    View-level permission to allow access only to users with a specific role.
-    Usage: permission_classes=[IsUserInRole('Risk Officer', 'Admin')]
-    """
+# NEW: Specific Role Checks (replace IsUserInRole)
+class IsRoleRiskOfficer(permissions.BasePermission):
+    """Allows access only to users with the 'Risk Officer' role."""
 
-    message = "User does not have required role to get an access."
-
-    def __init__(self, *role_names):
-        self.role_names = set(role_names)
+    message = "User must have the 'Risk Officer' role."
 
     def has_permission(self, request, view):
-        if not request.user.role:
-            return False
-        return request.user.role.name in self.role_names
+        return request.user.role and request.user.role.name == "Risk Officer"
+
+
+# !! This parameterized permission class requires redefining of
+# .get_permissions() method in the ViewSet, what in turn creates ambiguity
+# and repetition. Therefore commented out, use specific role classes.
+
+# class IsUserInRole(permissions.BasePermission):
+#     """
+#     View-level permission to allow access only to users with a specific role.
+#     Usage: permission_classes=[IsUserInRole('Risk Officer', 'Admin')]
+#     """
+
+#     message = "User does not have required role to get an access."
+
+#     def __init__(self, *role_names):
+#         self.role_names = set(role_names)
+
+#     def has_permission(self, request, view):
+#         if not request.user.role:
+#             return False
+#         return request.user.role.name in self.role_names

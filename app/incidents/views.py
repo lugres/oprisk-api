@@ -14,6 +14,7 @@ from incidents import serializers, services
 from .permissions import (
     IsIncidentCreator,
     IsIncidentManager,
+    IsRoleRiskOfficer,
 )
 from .workflows import InvalidTransitionError
 from .filters import IncidentFilter
@@ -125,6 +126,25 @@ class IncidentsViewSet(viewsets.ModelViewSet):
             )
             serializer = self.get_serializer(updated_incident)
             return Response(serializer.data, status=status.HTTP_200_OK)
+        except InvalidTransitionError as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, IsRoleRiskOfficer],
+    )
+    def validate(self, request, pk=None):
+        """Action to validate an incident: PENDING_VALIDATION -> VALIDATED."""
+        incident = self.get_object()
+        try:
+            updated_incident = services.validate_incident(
+                incident=incident, user=request.user
+            )
+            serializer = self.get_serializer(updated_incident)
+            return Response(serializer.data)
         except InvalidTransitionError as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST

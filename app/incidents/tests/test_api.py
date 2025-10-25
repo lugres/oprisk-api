@@ -299,6 +299,9 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.status_pending_validation = IncidentStatusRef.objects.create(
             code="PENDING_VALIDATION", name="Pending Risk Validation"
         )
+        self.status_validated = IncidentStatusRef.objects.create(
+            code="VALIDATED", name="Validated"
+        )
 
         # --- Create BUs ---
         self.bu_retail = BusinessUnit.objects.create(name="Retail")
@@ -363,6 +366,14 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             business_unit=self.bu_corp,
             title="Corp Incident",
         )
+        # Create an incident ready for validation
+        self.incident_emp1_pending_validation = create_incident(
+            user=self.employee1,
+            status=self.status_pending_validation,  # Set initial status
+            business_unit=self.bu_retail,
+            title="Emp1 Pending Validation",
+            assigned_to=self.risk_officer,  # Assume it was assigned on review
+        )
 
         # --- Configure State Machine ---
         AllowedTransition.objects.create(
@@ -375,6 +386,12 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             to_status=self.status_pending_validation,
             role=self.role_mgr,
         )
+        # Add rule for validation
+        AllowedTransition.objects.create(  # To test 'validate' endpoint
+            from_status=self.status_pending_validation,
+            to_status=self.status_validated,
+            role=self.role_risk,  # Only Risk Officer can validate
+        )
 
     # --- Test Layer 1: Data Segregation (get_queryset) ---
 
@@ -384,8 +401,8 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 1)
-        self.assertEqual(res.data[0]["title"], "Emp1 Incident")
+        self.assertEqual(len(res.data), 2)
+        self.assertEqual(res.data[1]["title"], "Emp1 Incident")
 
     def test_manager_sees_own_and_team_incidents(self):
         """Test a manager can see only his team's incidents and his own."""
@@ -393,7 +410,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 3)  # emp1, emp2, and their own
+        self.assertEqual(len(res.data), 4)  # emp1, emp2, and their own
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
         self.assertIn("Emp2 Incident", titles)
@@ -406,7 +423,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            len(res.data), 3
+            len(res.data), 4
         )  # emp1, emp2, manager (all in bu_retail)
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
@@ -461,6 +478,43 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertEqual(
             res.status_code, status.HTTP_404_NOT_FOUND
         )  # Fails get_queryset
+
+    def test_risk_officer_can_validate_incident(self):
+        """Test Risk Officer successfully validates an incident."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = reverse(
+            "incidents:incident-validate",
+            args=[self.incident_emp1_pending_validation.id],
+        )
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp1_pending_validation.refresh_from_db()
+
+        # Check domain logic (status change)
+        self.assertEqual(
+            self.incident_emp1_pending_validation.status, self.status_validated
+        )
+        # Check service side-effects
+        self.assertEqual(
+            self.incident_emp1_pending_validation.validated_by,
+            self.risk_officer,
+        )
+        self.assertIsNone(
+            self.incident_emp1_pending_validation.assigned_to
+        )  # Assignment should be cleared
+
+    def test_manager_cannot_validate_incident(self):
+        """Test Manager is blocked by permission class from validating."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-validate",
+            args=[self.incident_emp1_pending_validation.id],
+        )
+        res = self.client.post(url)
+
+        # Should fail Layer 2 permission check
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
     # --- Test Layer 3: Domain Logic (workflow.py) ---
 
@@ -520,3 +574,20 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # But transition is forbidden by business rules (Layer 3),
         # caught by validate_transition(), thus should fail
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_validate_incident_in_wrong_state(self):
+        """Test validating an incident not in PENDING_VALIDATION fails."""
+        # Use the incident still in DRAFT status
+        self.client.force_authenticate(user=self.risk_officer)
+        url = reverse(
+            "incidents:incident-validate",
+            args=[self.incident_emp1.id],  # incident_emp1 is DRAFT
+        )
+        res = self.client.post(url)
+
+        # Permission passes, but domain logic should fail
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn(
+            "Transition from 'DRAFT' to 'VALIDATED' is not defined.",
+            res.data["error"],
+        )
