@@ -7,7 +7,7 @@ Updates SLA details, evaluates custom routing rules, triggers notifications.
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
-
+from django.utils import timezone
 
 from .models import Incident, IncidentStatusRef, AllowedTransition
 from .workflows import validate_transition
@@ -132,5 +132,34 @@ def review_incident(*, incident: Incident, user: User) -> Incident:
 
     incident.save(
         update_fields=["status", "assigned_to", "reviewed_by", "updated_at"]
+    )
+    return incident
+
+
+@transaction.atomic
+def validate_incident(*, incident: Incident, user: User) -> Incident:
+    """Validates a PENDING_VALIDATION incident, moving it to VALIDATED."""
+    transition_rules = _get_transition_rules()
+    validate_transition(
+        from_status=incident.status.code,
+        to_status="VALIDATED",
+        role_name=user.role.name if user.role else "",
+        allowed_transitions=transition_rules,
+    )
+
+    new_status = IncidentStatusRef.objects.get(code="VALIDATED")
+    incident.status = new_status
+    incident.validated_by = user
+    incident.validated_at = timezone.now()
+    incident.assigned_to = None
+
+    incident.save(
+        update_fields=[
+            "status",
+            "validated_by",
+            "validated_at",
+            "assigned_to",
+            "updated_at",
+        ]
     )
     return incident
