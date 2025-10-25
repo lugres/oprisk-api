@@ -11,7 +11,8 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from incidents.models import Incident, IncidentStatusRef
+from incidents.models import Incident, IncidentStatusRef, AllowedTransition
+from references.models import Role, BusinessUnit
 
 from incidents.serializers import (
     IncidentListSerializer,
@@ -61,7 +62,9 @@ class PublicIncidentApiTests(TestCase):
 
 
 class PrivateIncidentApiTests(TestCase):
-    """Test authenticated API requests."""
+    """Test authenticated API requests.
+    Cover basic CRUD & Filtering.
+    """
 
     def setUp(self):
         self.client = APIClient()
@@ -243,32 +246,277 @@ class PrivateIncidentApiTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(Incident.objects.filter(id=incident.id).exists())
 
-    # Transitions - submit
-    def test_submit_incident_action_success(self):
-        """Test the custom action to submit a DRAFT incident."""
-        incident = create_incident(user=self.user, status=self.status_draft)
-        url = reverse("incidents:incident-submit", args=[incident.id])
+    # Transitions - submit - old tests for initial endpoint, COMMENTED OUT
+    # def test_submit_incident_action_success(self):
+    #     """Test the custom action to submit a DRAFT incident."""
+    #     incident = create_incident(user=self.user, status=self.status_draft)
+    #     url = reverse("incidents:incident-submit", args=[incident.id])
 
-        res = self.client.post(url)
+    #     res = self.client.post(url)
+    #     self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    #     incident.refresh_from_db()
+    #     self.assertEqual(incident.status.code, "PENDING_REVIEW")
+
+    # def test_submit_incident_wrong_status_fails(self):
+    #     """Test that submitting an incident not in DRAFT status fails."""
+    #     incident = create_incident(user=self.user,status=self.status_pending)
+    #     url = reverse("incidents:incident-submit", args=[incident.id])
+
+    #     res = self.client.post(url)
+    #     self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    # def test_submit_incident_not_owner_fails(self):
+    #     """Test that a user cannot submit an incident they did not create."""
+    #     new_user = create_user(email="user2@example.com", password="tstps12")
+    #     incident = create_incident(user=new_user, status=self.status_draft)
+    #     url = reverse("incidents:incident-submit", args=[incident.id])
+
+    #     res = self.client.post(url)
+    #     # This will fail with 404 because get_queryset already filters by usr
+    #     self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class IncidentApiTransitionsPermissionsTests(TestCase):
+    """Test authenticated API requests.
+    Cover Workflows & Permissions.
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+
+        # --- Create Roles & Statuses ---
+        self.role_emp = Role.objects.create(name="Employee")
+        self.role_mgr = Role.objects.create(name="Manager")
+        self.role_risk = Role.objects.create(name="Risk Officer")
+
+        self.status_draft = IncidentStatusRef.objects.create(
+            code="DRAFT", name="Draft"
+        )
+        self.status_pending_review = IncidentStatusRef.objects.create(
+            code="PENDING_REVIEW", name="Pending Manager Review"
+        )
+        self.status_pending_validation = IncidentStatusRef.objects.create(
+            code="PENDING_VALIDATION", name="Pending Risk Validation"
+        )
+
+        # --- Create BUs ---
+        self.bu_retail = BusinessUnit.objects.create(name="Retail")
+        self.bu_corp = BusinessUnit.objects.create(name="Corporate")
+
+        # --- Create Users ---
+        self.manager = create_user(
+            email="manager@example.com",
+            password="testpsw123",
+            role=self.role_mgr,
+            business_unit=self.bu_retail,
+        )
+        self.employee1 = create_user(
+            email="emp1@example.com",
+            password="testpsw123",
+            role=self.role_emp,
+            business_unit=self.bu_retail,
+            manager=self.manager,
+        )
+        self.employee2 = create_user(
+            email="emp2@example.com",
+            password="testpsw123",
+            role=self.role_emp,
+            business_unit=self.bu_retail,
+            manager=self.manager,
+        )
+        self.risk_officer = create_user(
+            email="risk@example.com",
+            password="testpsw123",
+            role=self.role_risk,
+            business_unit=self.bu_retail,
+        )
+        self.other_bu_emp = create_user(
+            email="other@example.com",
+            password="testpsw123",
+            role=self.role_emp,
+            business_unit=self.bu_corp,
+        )
+
+        # --- Create Incidents ---
+        self.incident_emp1 = create_incident(
+            user=self.employee1,
+            status=self.status_draft,
+            business_unit=self.bu_retail,
+            title="Emp1 Incident",
+        )
+        self.incident_emp2 = create_incident(
+            user=self.employee2,
+            status=self.status_pending_review,
+            business_unit=self.bu_retail,
+            title="Emp2 Incident",
+        )
+        self.incident_mgr = create_incident(
+            user=self.manager,
+            status=self.status_draft,
+            business_unit=self.bu_retail,
+            title="Manager Incident",
+        )
+        self.incident_other_bu = create_incident(
+            user=self.other_bu_emp,
+            status=self.status_draft,
+            business_unit=self.bu_corp,
+            title="Corp Incident",
+        )
+
+        # --- Configure State Machine ---
+        AllowedTransition.objects.create(
+            from_status=self.status_draft,
+            to_status=self.status_pending_review,
+            role=self.role_emp,
+        )
+        AllowedTransition.objects.create(
+            from_status=self.status_pending_review,
+            to_status=self.status_pending_validation,
+            role=self.role_mgr,
+        )
+
+    # --- Test Layer 1: Data Segregation (get_queryset) ---
+
+    def test_employee_sees_only_own_incidents(self):
+        """Test an employee can see only his incidents."""
+        self.client.force_authenticate(user=self.employee1)
+        res = self.client.get(INCIDENTS_LIST_URL)
+
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data), 1)
+        self.assertEqual(res.data[0]["title"], "Emp1 Incident")
 
-        incident.refresh_from_db()
-        self.assertEqual(incident.status.code, "PENDING_REVIEW")
+    def test_manager_sees_own_and_team_incidents(self):
+        """Test a manager can see only his team's incidents and his own."""
+        self.client.force_authenticate(user=self.manager)
+        res = self.client.get(INCIDENTS_LIST_URL)
 
-    def test_submit_incident_wrong_status_fails(self):
-        """Test that submitting an incident not in DRAFT status fails."""
-        incident = create_incident(user=self.user, status=self.status_pending)
-        url = reverse("incidents:incident-submit", args=[incident.id])
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(res.data), 3)  # emp1, emp2, and their own
+        titles = {item["title"] for item in res.data}
+        self.assertIn("Emp1 Incident", titles)
+        self.assertIn("Emp2 Incident", titles)
+        self.assertIn("Manager Incident", titles)
+
+    def test_risk_officer_sees_all_bu_incidents(self):
+        """Test risk officer can see all incidents of a BU."""
+        self.client.force_authenticate(user=self.risk_officer)
+        res = self.client.get(INCIDENTS_LIST_URL)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            len(res.data), 3
+        )  # emp1, emp2, manager (all in bu_retail)
+        titles = {item["title"] for item in res.data}
+        self.assertIn("Emp1 Incident", titles)
+        self.assertNotIn(
+            "Corp Incident", titles
+        )  # Does not see other BU's incident
+
+    # --- Test Layer 2: Action Permissions (permission_classes) ---
+
+    def test_employee_can_submit_own_incident(self):
+        """Test an employee can submit his own incident for review."""
+        self.client.force_authenticate(user=self.employee1)
+        url = reverse(
+            "incidents:incident-submit", args=[self.incident_emp1.id]
+        )
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp1.refresh_from_db()
+        self.assertEqual(self.incident_emp1.status.code, "PENDING_REVIEW")
+
+    def test_employee_cannot_submit_other_incident(self):
+        """Test an employee can NOT submit other's incident for review."""
+        self.client.force_authenticate(user=self.employee1)
+        url = reverse("incidents:incident-submit", args=[self.incident_mgr.id])
+        res = self.client.post(url)
+
+        self.assertEqual(
+            res.status_code, status.HTTP_404_NOT_FOUND
+        )  # Fails get_queryset first
+
+    def test_manager_can_review_team_incident(self):
+        """Test a manager can review an incident from his team."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-review", args=[self.incident_emp2.id]
+        )
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp2.refresh_from_db()
+        self.assertEqual(self.incident_emp2.status.code, "PENDING_VALIDATION")
+
+    def test_employee_cannot_review_incident(self):
+        """Test an employee can NOT review incident."""
+        self.client.force_authenticate(user=self.employee1)
+        url = reverse(
+            "incidents:incident-review", args=[self.incident_emp2.id]
+        )
+        res = self.client.post(url)
+
+        self.assertEqual(
+            res.status_code, status.HTTP_404_NOT_FOUND
+        )  # Fails get_queryset
+
+    # --- Test Layer 3: Domain Logic (workflow.py) ---
+
+    def test_transition_fails_if_role_is_wrong(self):
+        """Test that a submit fails if the rule doesn't allow the role."""
+        # We configured submit to only be allowed by 'Employee' role.
+        # Let's test what happens if a 'Manager' tries to submit.
+        self.client.force_authenticate(user=self.manager)
+        url = reverse("incidents:incident-submit", args=[self.incident_mgr.id])
+        res = self.client.post(url)
+
+        # The IsIncidentCreator permission passes (it's their own incident)
+        # But the *domain logic* should fail
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Role 'Manager' is not authorized", res.data["error"])
+
+    def test_transition_fails_if_wrong_state(self):
+        """Test submitting an already-submitted incident fails."""
+        self.client.force_authenticate(user=self.employee2)
+        # This incident is already PENDING_REVIEW
+        url = reverse(
+            "incidents:incident-submit", args=[self.incident_emp2.id]
+        )
+        res = self.client.post(url)
+
+        # The permission passes (it's their incident), but the
+        # domain logic (workflow.py) should reject the state transition.
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("is not defined", res.data["error"])
+
+    def test_review_incident_side_effects_assignment(self):
+        """Test that reviewing an incident correctly assigns it
+        to a Risk Officer."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-review", args=[self.incident_emp2.id]
+        )
+        self.client.post(url)
+
+        self.incident_emp2.refresh_from_db()
+
+        # Test the side-effects of the service function
+        self.assertEqual(
+            self.incident_emp2.status, self.status_pending_validation
+        )
+        self.assertEqual(self.incident_emp2.reviewed_by, self.manager)
+        self.assertEqual(self.incident_emp2.assigned_to, self.risk_officer)
+
+    def test_manager_cannot_submit_own_incident(self):
+        """Test manager is blocked by business rules."""
+        self.client.force_authenticate(user=self.manager)
+        # The manager can *see* and access this incident (Layer 1 & 2 pass)
+        url = reverse("incidents:incident-submit", args=[self.incident_mgr.id])
 
         res = self.client.post(url)
-        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_submit_incident_not_owner_fails(self):
-        """Test that a user cannot submit an incident they did not create."""
-        new_user = create_user(email="user2@example.com", password="tstpsw12")
-        incident = create_incident(user=new_user, status=self.status_draft)
-        url = reverse("incidents:incident-submit", args=[incident.id])
-
-        res = self.client.post(url)
-        # This will fail with 404 because get_queryset already filters by user
-        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+        # But transition is forbidden by business rules (Layer 3),
+        # caught by validate_transition(), thus should fail
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)

@@ -56,3 +56,38 @@ class IncidentAdminTests(TestCase):
         url = reverse("admin:incidents_incident_change", args=[incident.id])
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
+
+    def test_changelist_pages_load_successfully_for_incident_models(self):
+        """Test that the changelist for each incident model loads correctly."""
+        model_names = [
+            "simplifiedeventtyperef",
+            "incidentstatusref",
+            "incidentroutingrule",
+            "incidentrequiredfield",
+            "slaconfig",
+            "allowedtransition",
+        ]
+        for name in model_names:
+            url = reverse(f"admin:incidents_{name}_changelist")
+            response = self.client.get(url)
+            self.assertEqual(
+                response.status_code, 200, f"Failed for {name} changelist"
+            )
+
+    def test_add_pages_load_successfully_for_incident_models(self):
+        """Test that the add page for each incident model loads correctly."""
+
+        model_names = [
+            "simplifiedeventtyperef",
+            "incidentstatusref",
+            "incidentroutingrule",
+            "incidentrequiredfield",
+            "slaconfig",
+            "allowedtransition",
+        ]
+        for name in model_names:
+            url = reverse(f"admin:incidents_{name}_add")
+            response = self.client.get(url)
+            self.assertEqual(
+                response.status_code, 200, f"Failed for {name} add page"
+            )

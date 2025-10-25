@@ -134,6 +134,14 @@ class Incident(TimestampedModel, OwnedModel):
         null=True,
         related_name="assigned_incidents",
     )
+    # added 23/10/2025 to track who performed 'review'
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,  # Or PROTECT
+        blank=True,
+        null=True,
+        related_name="reviewed_incidents",
+    )
     validated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -242,3 +250,33 @@ class SlaConfig(models.Model):
 
     def __str__(self):
         return self.key
+
+
+# --- State Machine Configuration Model ---
+class AllowedTransition(models.Model):
+    """
+    A config model for data-driven state machine.
+    Defines which roles can move an incident from one status to another.
+    """
+
+    from_status = models.ForeignKey(
+        IncidentStatusRef, on_delete=models.CASCADE, related_name="+"
+    )
+    to_status = models.ForeignKey(
+        IncidentStatusRef, on_delete=models.CASCADE, related_name="+"
+    )
+    role = models.ForeignKey(
+        Role,
+        on_delete=models.CASCADE,
+        help_text="The role required to perform this transition.",
+    )
+
+    class Meta:
+        unique_together = ("from_status", "to_status", "role")
+        verbose_name = "Allowed Workflow Transition"
+
+    def __str__(self):
+        return (
+            f"{self.from_status.code} -> {self.to_status.code}"
+            f" [{self.role.name}]"
+        )

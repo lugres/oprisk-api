@@ -7,13 +7,14 @@ from django.contrib.auth import get_user_model
 from django.db.utils import IntegrityError
 from time import sleep
 
-from references.models import BusinessUnit, BaselEventType
+from references.models import BusinessUnit, BaselEventType, Role
 from incidents.models import (
     Incident,
     IncidentStatusRef,
     LossCause,
     SimplifiedEventTypeRef,
     IncidentCause,
+    AllowedTransition,
 )
 
 User = get_user_model()
@@ -27,8 +28,12 @@ class IncidentModelTests(TestCase):
             email="reporter@example.com", password="testpass123"
         )
         self.bu = BusinessUnit.objects.create(name="Retail Banking")
+        self.role = Role.objects.create(name="Employee")
         self.status_draft = IncidentStatusRef.objects.create(
             code="DRAFT", name="Draft"
+        )
+        self.status_pending = IncidentStatusRef.objects.create(
+            code="PENDING_REVIEW", name="Pending"
         )
         self.basel_event_type = BaselEventType.objects.create(
             name="External Fraud"
@@ -131,3 +136,13 @@ class IncidentModelTests(TestCase):
         # )
         # self.assertEqual(incident.calculate_net_loss(), 750.00)
         pass  # Placeholder until the method is implemented
+
+    def test_allowed_transition_model(self):
+        """Test an allowed incident transition can be created."""
+        transition = AllowedTransition.objects.create(
+            from_status=self.status_draft,
+            to_status=self.status_pending,
+            role=self.role,
+        )
+        self.assertEqual(str(transition), "DRAFT -> PENDING_REVIEW [Employee]")
+        self.assertEqual(transition.from_status, self.status_draft)
