@@ -544,10 +544,10 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             "incidents:incident-return-to-draft",
             args=[self.incident_emp2_pending_review.id],
         )
-        # Optionally, include a reason in the payload if your endpoint expects it
+        # Optionally, include a reason in the payload if endpoint expects it
         # payload = {'reason': 'Needs more detail.'}
         # res = self.client.post(url, payload)
-        res = self.client.post(url)  # Assuming no payload needed for MVP
+        res = self.client.post(url)  # Assuming no payload needed for MVP now
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.incident_emp2_pending_review.refresh_from_db()
@@ -560,7 +560,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         )  # Assignment should be cleared
 
     def test_manager_cannot_return_to_review(self):
-        """Test Manager is blocked by permission class from returning to review."""
+        """Test Manager is blocked by permissions from returning to review."""
         self.client.force_authenticate(user=self.manager)
         url = reverse(
             "incidents:incident-return-to-review",
@@ -692,6 +692,6 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # Permission might pass, but domain logic should fail
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn(
-            "Transition from 'PENDING_VALIDATION' to 'DRAFT'  is not defined.",
+            "Transition from 'PENDING_VALIDATION' to 'DRAFT' is not defined.",
             res.data["error"],
         )

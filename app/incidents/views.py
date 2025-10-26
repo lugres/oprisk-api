@@ -15,6 +15,7 @@ from .permissions import (
     IsIncidentCreator,
     IsIncidentManager,
     IsRoleRiskOfficer,
+    IsRoleManager,
 )
 from .workflows import InvalidTransitionError
 from .filters import IncidentFilter
@@ -146,6 +147,47 @@ class IncidentsViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(updated_incident)
             return Response(serializer.data)
         except InvalidTransitionError as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, IsRoleManager],
+    )
+    def return_to_draft(self, request, pk=None):
+        """Action to return an incident: PENDING_REVIEW -> DRAFT."""
+        incident = self.get_object()
+        try:
+            # Optionally get reason from request.data
+            # reason = request.data.get('reason')
+            updated_incident = services.return_to_draft(
+                incident=incident, user=request.user  # , reason=reason
+            )
+            serializer = serializers.IncidentDetailSerializer(updated_incident)
+            return Response(serializer.data)
+        except InvalidTransitionError as e:  # Catch Layer 3 errors
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, IsRoleRiskOfficer],
+    )
+    def return_to_review(self, request, pk=None):
+        """Action to return an incident: PENDING_VALIDTN -> PENDING_REVIEW."""
+        incident = self.get_object()
+        try:
+            # reason = request.data.get('reason')
+            updated_incident = services.return_to_review(
+                incident=incident, user=request.user  # , reason=reason
+            )
+            serializer = serializers.IncidentDetailSerializer(updated_incident)
+            return Response(serializer.data)
+        except InvalidTransitionError as e:  # Catch Layer 3 errors
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
