@@ -8,6 +8,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
+from drf_spectacular.utils import extend_schema
 
 from incidents.models import Incident
 from incidents import serializers, services
@@ -15,6 +16,7 @@ from .permissions import (
     IsIncidentCreator,
     IsIncidentManager,
     IsRoleRiskOfficer,
+    IsRoleManager,
 )
 from .workflows import InvalidTransitionError
 from .filters import IncidentFilter
@@ -146,6 +148,68 @@ class IncidentsViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(updated_incident)
             return Response(serializer.data)
         except InvalidTransitionError as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+    # Tell drf-spectacular which serializer to user in swagger UI
+    @extend_schema(
+        request=serializers.ReturnActionSerializer,
+        responses=serializers.IncidentDetailSerializer,
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, IsRoleManager],
+    )
+    def return_to_draft(self, request, pk=None):
+        """Action to return an incident: PENDING_REVIEW -> DRAFT."""
+        incident = self.get_object()
+
+        # Validate input using the serializer
+        serializer = serializers.ReturnActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data["reason"]
+        try:
+            updated_incident = services.return_to_draft(
+                incident=incident, user=request.user, reason=reason
+            )
+            response_serializer = serializers.IncidentDetailSerializer(
+                updated_incident
+            )
+            return Response(response_serializer.data)
+        except InvalidTransitionError as e:  # Catch Layer 3 errors
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+    # Tell drf-spectacular which serializer to user in swagger UI
+    @extend_schema(
+        request=serializers.ReturnActionSerializer,
+        responses=serializers.IncidentDetailSerializer,
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, IsRoleRiskOfficer],
+    )
+    def return_to_review(self, request, pk=None):
+        """Action to return an incident: PENDING_VALIDTN -> PENDING_REVIEW."""
+        incident = self.get_object()
+
+        # Validate input using the serializer
+        serializer = serializers.ReturnActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data["reason"]
+        try:
+            updated_incident = services.return_to_review(
+                incident=incident, user=request.user, reason=reason
+            )
+            response_serializer = serializers.IncidentDetailSerializer(
+                updated_incident
+            )
+            return Response(response_serializer.data)
+        except InvalidTransitionError as e:  # Catch Layer 3 errors
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )

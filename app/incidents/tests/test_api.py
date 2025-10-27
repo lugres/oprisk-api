@@ -374,6 +374,14 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             title="Emp1 Pending Validation",
             assigned_to=self.risk_officer,  # Assume it was assigned on review
         )
+        # Create incident ready for return actions
+        self.incident_emp2_pending_review = create_incident(
+            user=self.employee2,
+            status=self.status_pending_review,
+            business_unit=self.bu_retail,
+            title="Emp2 Pending Review",
+            assigned_to=self.manager,  # Assume assigned to manager
+        )
 
         # --- Configure State Machine ---
         AllowedTransition.objects.create(
@@ -391,6 +399,17 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             from_status=self.status_pending_validation,
             to_status=self.status_validated,
             role=self.role_risk,  # Only Risk Officer can validate
+        )
+        # Add rules for returning incidents
+        AllowedTransition.objects.create(
+            from_status=self.status_pending_review,
+            to_status=self.status_draft,
+            role=self.role_mgr,  # Manager returns
+        )
+        AllowedTransition.objects.create(
+            from_status=self.status_pending_validation,
+            to_status=self.status_pending_review,
+            role=self.role_risk,  # Risk Officer returns
         )
 
     # --- Test Layer 1: Data Segregation (get_queryset) ---
@@ -410,7 +429,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 4)  # emp1, emp2, and their own
+        self.assertEqual(len(res.data), 5)  # emp1, emp2, and their own
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
         self.assertIn("Emp2 Incident", titles)
@@ -423,7 +442,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            len(res.data), 4
+            len(res.data), 5
         )  # emp1, emp2, manager (all in bu_retail)
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
@@ -479,6 +498,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             res.status_code, status.HTTP_404_NOT_FOUND
         )  # Fails get_queryset
 
+    # Tests for 'validate' action
     def test_risk_officer_can_validate_incident(self):
         """Test Risk Officer successfully validates an incident."""
         self.client.force_authenticate(user=self.risk_officer)
@@ -515,6 +535,127 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         # Should fail Layer 2 permission check
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    # --- Tests for 'return' actions ---
+    def test_manager_can_return_to_draft_with_reason(self):
+        """Test manager can return an incident (PENDING_REVIEW to DRAFT).
+        Reason is required."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-return-to-draft",
+            args=[self.incident_emp2_pending_review.id],
+        )
+        # Include a reason in the payload
+        payload = {"reason": "Needs more details in description."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp2_pending_review.refresh_from_db()
+
+        self.assertEqual(
+            self.incident_emp2_pending_review.status, self.status_draft
+        )
+        self.assertIsNone(
+            self.incident_emp2_pending_review.assigned_to
+        )  # Assignment should be cleared
+        # Check that the reason was added to notes
+        self.assertIn(
+            payload["reason"], self.incident_emp2_pending_review.notes
+        )
+        self.assertIn(
+            self.manager.email, self.incident_emp2_pending_review.notes
+        )
+
+    def test_return_to_draft_fails_without_reason(self):
+        """Test returning to draft fails if reason payload is missing."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-return-to-draft",
+            args=[self.incident_emp2_pending_review.id],
+        )
+        res = self.client.post(url, {})  # Empty payload
+
+        # Should fail serializer validation
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reason", res.data)
+        self.assertIn("required", str(res.data["reason"]))
+
+    def test_return_to_draft_fails_with_blank_reason(self):
+        """Test returning to draft fails if reason payload is blank."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-return-to-draft",
+            args=[self.incident_emp2_pending_review.id],
+        )
+        res = self.client.post(url, {"reason": ""})  # Blank reason
+
+        # Should fail serializer validation
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reason", res.data)
+        self.assertIn("blank", str(res.data["reason"]))
+
+    def test_manager_cannot_return_to_review(self):
+        """Test Manager is blocked by permissions from returning to review."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-return-to-review",
+            args=[self.incident_emp1_pending_validation.id],
+        )
+        res = self.client.post(url)
+        # Should fail Layer 2 permission check (IsRoleRiskOfficer needed)
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_employee_cannot_return_to_draft(self):
+        """Test employee is blocked by permission class from returning."""
+        self.client.force_authenticate(user=self.employee1)
+        url = reverse(
+            "incidents:incident-return-to-draft",
+            args=[self.incident_emp2_pending_review.id],
+        )
+        res = self.client.post(url)
+        # Should fail Layer 2 permission check
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_risk_officer_can_return_to_review_with_reason(self):
+        """Test Risk Officer successfully returns incident with reason."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = reverse(
+            "incidents:incident-return-to-review",
+            args=[self.incident_emp1_pending_validation.id],
+        )
+        payload = {"reason": "Incorrect category assigned."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp1_pending_validation.refresh_from_db()
+        self.assertEqual(
+            self.incident_emp1_pending_validation.status,
+            self.status_pending_review,
+        )
+        # Check on assignment logic - reassign to manager
+        self.assertEqual(
+            self.incident_emp1_pending_validation.assigned_to, self.manager
+        )
+        # Check notes for reason
+        self.assertIn(
+            payload["reason"], self.incident_emp1_pending_validation.notes
+        )
+        self.assertIn(
+            self.risk_officer.email,
+            self.incident_emp1_pending_validation.notes,
+        )
+
+    def test_return_to_review_fails_without_reason(self):
+        """Test returning to review fails if reason payload is missing."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = reverse(
+            "incidents:incident-return-to-review",
+            args=[self.incident_emp1_pending_validation.id],
+        )
+        res = self.client.post(url, {})  # Empty payload
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reason", res.data)
 
     # --- Test Layer 3: Domain Logic (workflow.py) ---
 
@@ -575,6 +716,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # caught by validate_transition(), thus should fail
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
 
+    # --- Tests for 'validate' action ---
     def test_cannot_validate_incident_in_wrong_state(self):
         """Test validating an incident not in PENDING_VALIDATION fails."""
         # Use the incident still in DRAFT status
@@ -589,5 +731,25 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn(
             "Transition from 'DRAFT' to 'VALIDATED' is not defined.",
+            res.data["error"],
+        )
+
+    # --- Tests for 'return' actions ---
+    def test_cannot_return_to_draft_from_wrong_state(self):
+        """Test returning to draft fails if not in PENDING_REVIEW."""
+        # Use the incident already pending validation
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-return-to-draft",
+            args=[self.incident_emp1_pending_validation.id],
+        )
+        payload = {"reason": "Testing wrong state"}
+        res = self.client.post(url, payload)
+
+        # Permission passes, but domain logic should fail
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", res.data)
+        self.assertIn(
+            "Transition from 'PENDING_VALIDATION' to 'DRAFT' is not defined.",
             res.data["error"],
         )

@@ -53,6 +53,7 @@ class IncidentDetailSerializer(IncidentListSerializer):
             "recovery_amount",
             "net_loss_amount",
             "created_by",
+            "notes",
         ]
 
 
@@ -91,3 +92,13 @@ class IncidentUpdateSerializer(serializers.ModelSerializer):
             "near_miss",
         ]
         read_only_fields = ["status"]
+
+
+class ReturnActionSerializer(serializers.Serializer):
+    """Serializer to validate the required 'reason' for return actions."""
+
+    reason = serializers.CharField(
+        required=True,
+        allow_blank=False,
+        max_length=500,  # Example length limit
+    )

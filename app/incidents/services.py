@@ -163,3 +163,75 @@ def validate_incident(*, incident: Incident, user: User) -> Incident:
         ]
     )
     return incident
+
+
+@transaction.atomic
+def return_to_draft(
+    *, incident: Incident, user: User, reason: str
+) -> Incident:
+    """Returns a PENDING_REVIEW incident to DRAFT, reason is required."""
+    transition_rules = _get_transition_rules()
+    validate_transition(
+        from_status=incident.status.code,
+        to_status="DRAFT",
+        role_name=user.role.name if user.role else "",
+        allowed_transitions=transition_rules,
+    )
+
+    new_status = IncidentStatusRef.objects.get(code="DRAFT")
+
+    # Apply side-effects
+    incident.status = new_status
+    incident.assigned_to = None  # Clear assignment when returned
+    # Add reason to notes
+    timestamp = timezone.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+    note_prefix = (
+        f"[{timestamp} Returned to Draft by {user.email}]: {reason}\n---\n"
+    )
+    incident.notes = note_prefix + (incident.notes or "")
+
+    incident.save(
+        update_fields=["status", "assigned_to", "updated_at", "notes"]
+    )  # Add 'notes'/'reason' if used
+    return incident
+
+
+@transaction.atomic
+def return_to_review(
+    *, incident: Incident, user: User, reason: str
+) -> Incident:
+    """Returns a PENDING_VALIDATION incident to PENDING_REVIEW, with reason."""
+    transition_rules = _get_transition_rules()
+    validate_transition(
+        from_status=incident.status.code,
+        to_status="PENDING_REVIEW",
+        role_name=user.role.name if user.role else "",
+        allowed_transitions=transition_rules,
+    )
+
+    new_status = IncidentStatusRef.objects.get(code="PENDING_REVIEW")
+
+    # Apply side-effects
+    incident.status = new_status
+    # Re-assign back to the manager who originally reviewed it,
+    # or creator's manager
+    if incident.reviewed_by:
+        incident.assigned_to = incident.reviewed_by  # Reassign to reviewer
+    elif incident.created_by and incident.created_by.manager:
+        incident.assigned_to = (
+            incident.created_by.manager
+        )  # Fallback to creator's manager
+    else:
+        incident.assigned_to = None  # Clear if no one to assign back to
+
+    # Append reason to notes
+    timestamp = timezone.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+    note_prefix = (
+        f"[{timestamp} Returned to Review by {user.email}]: {reason}\n---\n"
+    )
+    incident.notes = note_prefix + (incident.notes or "")
+
+    incident.save(
+        update_fields=["status", "assigned_to", "updated_at", "notes"]
+    )
+    return incident

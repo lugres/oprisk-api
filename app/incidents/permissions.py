@@ -37,9 +37,18 @@ class IsRoleRiskOfficer(permissions.BasePermission):
         return request.user.role and request.user.role.name == "Risk Officer"
 
 
+class IsRoleManager(permissions.BasePermission):
+    """Allows access only to users with the 'Manager' role."""
+
+    message = "User must have the 'Manager' role."
+
+    def has_permission(self, request, view):
+        return request.user.role and request.user.role.name == "Manager"
+
+
 # !! This parameterized permission class requires redefining of
 # .get_permissions() method in the ViewSet, what in turn creates ambiguity
-# and repetition. Therefore commented out, use specific role classes.
+# and repetition. Therefore commented out, use specific role classes instead.
 
 # class IsUserInRole(permissions.BasePermission):
 #     """
