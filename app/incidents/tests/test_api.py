@@ -302,6 +302,9 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.status_validated = IncidentStatusRef.objects.create(
             code="VALIDATED", name="Validated"
         )
+        self.status_closed = IncidentStatusRef.objects.create(
+            code="CLOSED", name="Closed"
+        )
 
         # --- Create BUs ---
         self.bu_retail = BusinessUnit.objects.create(name="Retail")
@@ -382,6 +385,14 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             title="Emp2 Pending Review",
             assigned_to=self.manager,  # Assume assigned to manager
         )
+        # Create an incident ready for closing
+        self.incident_emp1_validated = create_incident(
+            user=self.employee1,
+            status=self.status_validated,
+            business_unit=self.bu_retail,
+            title="Emp1 Validated Incident",
+            validated_by=self.risk_officer,  # Assume validated by RO
+        )
 
         # --- Configure State Machine ---
         AllowedTransition.objects.create(
@@ -411,6 +422,12 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             to_status=self.status_pending_review,
             role=self.role_risk,  # Risk Officer returns
         )
+        # Add rule for closing incidents
+        AllowedTransition.objects.create(
+            from_status=self.status_validated,
+            to_status=self.status_closed,
+            role=self.role_risk,  # Only Risk Officer can close
+        )
 
     # --- Test Layer 1: Data Segregation (get_queryset) ---
 
@@ -420,8 +437,8 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 2)
-        self.assertEqual(res.data[1]["title"], "Emp1 Incident")
+        self.assertEqual(len(res.data), 3)
+        self.assertEqual(res.data[2]["title"], "Emp1 Incident")
 
     def test_manager_sees_own_and_team_incidents(self):
         """Test a manager can see only his team's incidents and his own."""
@@ -429,7 +446,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 5)  # emp1, emp2, and their own
+        self.assertEqual(len(res.data), 6)  # emp1, emp2, and their own
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
         self.assertIn("Emp2 Incident", titles)
@@ -442,7 +459,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            len(res.data), 5
+            len(res.data), 6
         )  # emp1, emp2, manager (all in bu_retail)
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
@@ -657,6 +674,40 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("reason", res.data)
 
+    # --- Tests for 'close' action ---
+    def test_risk_officer_can_close_incident(self):
+        """Test Risk Officer successfully closes a VALIDATED incident."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = reverse(
+            "incidents:incident-close", args=[self.incident_emp1_validated.id]
+        )
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp1_validated.refresh_from_db()
+
+        # Check domain logic (status change)
+        self.assertEqual(
+            self.incident_emp1_validated.status, self.status_closed
+        )
+        # Check service side-effects
+        self.assertEqual(
+            self.incident_emp1_validated.closed_by, self.risk_officer
+        )
+        self.assertIsNotNone(self.incident_emp1_validated.closed_at)
+        self.assertIsNone(self.incident_emp1_validated.assigned_to)
+
+    def test_manager_cannot_close_incident(self):
+        """Test Manager is blocked by permission class from closing."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-close", args=[self.incident_emp1_validated.id]
+        )
+        res = self.client.post(url)
+
+        # Should fail Layer 2 permission check (IsRoleRiskOfficer needed)
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
     # --- Test Layer 3: Domain Logic (workflow.py) ---
 
     def test_transition_fails_if_role_is_wrong(self):
@@ -751,5 +802,23 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertIn("error", res.data)
         self.assertIn(
             "Transition from 'PENDING_VALIDATION' to 'DRAFT' is not defined.",
+            res.data["error"],
+        )
+
+    # --- Tests for 'close' action ---
+    def test_cannot_close_incident_in_wrong_state(self):
+        """Test closing an incident not in VALIDATED status fails."""
+        # Use the incident still in DRAFT status
+        self.client.force_authenticate(user=self.risk_officer)
+        url = reverse(
+            "incidents:incident-close",
+            args=[self.incident_emp1.id],  # incident_emp1 is DRAFT
+        )
+        res = self.client.post(url)
+
+        # Permission passes, but domain logic should fail
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn(
+            "Transition from 'DRAFT' to 'CLOSED' is not defined.",
             res.data["error"],
         )
