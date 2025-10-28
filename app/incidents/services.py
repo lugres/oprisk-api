@@ -235,3 +235,35 @@ def return_to_review(
         update_fields=["status", "assigned_to", "updated_at", "notes"]
     )
     return incident
+
+
+@transaction.atomic
+def close_incident(*, incident: Incident, user: User) -> Incident:
+    """Closes a VALIDATED incident."""
+    transition_rules = _get_transition_rules()
+    # Domain Layer validation
+    validate_transition(
+        from_status=incident.status.code,
+        to_status="CLOSED",
+        role_name=user.role.name if user.role else "",
+        allowed_transitions=transition_rules,
+    )
+
+    new_status = IncidentStatusRef.objects.get(code="CLOSED")
+
+    # Apply side-effects
+    incident.status = new_status
+    incident.closed_by = user
+    incident.closed_at = timezone.now()  # Record closing time
+    incident.assigned_to = None  # Clear assignment
+
+    incident.save(
+        update_fields=[
+            "status",
+            "closed_by",
+            "closed_at",
+            "assigned_to",
+            "updated_at",
+        ]
+    )
+    return incident

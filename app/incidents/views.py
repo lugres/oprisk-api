@@ -213,3 +213,25 @@ class IncidentsViewSet(viewsets.ModelViewSet):
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAuthenticated, IsRoleRiskOfficer],  # L2 checks
+    )
+    def close(self, request, pk=None):
+        """Action to close an incident: VALIDATED -> CLOSED."""
+        incident = self.get_object()  # Layer 1 check implicit here
+        try:
+            # Call Application Layer (Service)
+            updated_incident = services.close_incident(
+                incident=incident, user=request.user
+            )
+            serializer = serializers.IncidentDetailSerializer(
+                updated_incident
+            )  # Use Detail for response
+            return Response(serializer.data)
+        except InvalidTransitionError as e:  # Catch Layer 3 errors
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
