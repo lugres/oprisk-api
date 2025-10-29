@@ -198,7 +198,8 @@ class IncidentRoutingEvaluationTests(TestCase):
         self.assertIsNone(routing_result)
 
     def test_routing_handles_missing_amount_correctly(self):
-        """Test missing amount prevents matching Rule A, falls back correctly."""
+        """Test missing amount prevents matching Rule A,
+        falls back correctly."""
         # This incident has event=External Fraud, so it should match Rule C
         routing_result = evaluate_routing_for_incident(
             self.incident_missing_amount
