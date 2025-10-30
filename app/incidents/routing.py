@@ -1,5 +1,6 @@
 """
 Incident routing evaluator based on rules in JSON predicates.
+Django-aware application-level helper optimized for performance.
 Routing rules are stored in IncidentRoutingRule data model.
 """
 

@@ -75,25 +75,41 @@ def _find_risk_officer(business_unit):
     return User.objects.filter(role__name="Risk Officer").first()
 
 
-def _find_user_from_routing(routing_result: dict) -> User | None:
+# Consolidated helper function for routing logic
+def _get_incident_assignee(incident: Incident, reporter: User) -> User | None:
     """
-    Attempts to find a single user matching the routing rule.
-    Finds the first user that matches the combination of role and/or BU.
+    Determines the correct assignee for an incident based on routing priority.
+
+    Priority:
+    1. Custom routing rule (if it finds a specific user).
+    2. Incident reporter's manager.
+    3. None (if no rule matches and no manager).
     """
-    role_id = routing_result.get("route_to_role_id")
-    bu_id = routing_result.get("route_to_bu_id")
+    # 1. Try to find a user based on custom routing rules
+    routing_result = evaluate_routing_for_incident(incident)
 
-    if not role_id and not bu_id:
-        # Rule is incomplete, no one to assign
-        return None
+    if routing_result:
+        role_id = routing_result.get("route_to_role_id")
+        bu_id = routing_result.get("route_to_bu_id")
 
-    query = User.objects.all()
-    if role_id:
-        query = query.filter(role_id=role_id)
-    if bu_id:
-        query = query.filter(business_unit_id=bu_id)
+        if role_id or bu_id:
+            # Build the query to find a user matching the rule
+            query = User.objects.all()
+            if role_id:
+                query = query.filter(role_id=role_id)
+            if bu_id:
+                query = query.filter(business_unit_id=bu_id)
 
-    return query.first()  # Returns the first matching user or None
+            rule_based_user = query.first()
+            if rule_based_user:
+                return rule_based_user  # Found a user from a rule
+
+    # 2. Fallback: Reporter's manager
+    if reporter.manager:
+        return reporter.manager
+
+    # 3. Default
+    return None
 
 
 # --- Service Functions ---
@@ -121,29 +137,10 @@ def submit_incident(*, incident: Incident, user: User) -> Incident:
     pending_status = IncidentStatusRef.objects.get(code="PENDING_REVIEW")
     incident.status = pending_status
 
-    # --- New Routing Logic ---
-    assigned_user = None
-    routing_result = evaluate_routing_for_incident(incident)
-
-    if routing_result:
-        assigned_user = _find_user_from_routing(routing_result)
-
-    # Apply assignment: Rule > Manager > None
-    if assigned_user:
-        incident.assigned_to = assigned_user
-    elif user.manager:
-        incident.assigned_to = user.manager  # Fallback logic
-    else:
-        incident.assigned_to = None
-    # --- End New Routing Logic ---
-
-    # Side-effect: Assign to manager if they exist
-    # if user.manager:
-    #     incident.assigned_to = user.manager
+    # Clean incident routing logic
+    incident.assigned_to = _get_incident_assignee(incident, user)
 
     # Placeholder for future logic
-    # if incident.created_by.manager:
-    #     incident.assigned_to = incident.created_by.manager
     # calculate_sla(incident)
     # check_routing_rules(incident)
 
