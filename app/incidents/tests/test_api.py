@@ -11,8 +11,17 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from incidents.models import Incident, IncidentStatusRef, AllowedTransition
-from references.models import Role, BusinessUnit
+from incidents.models import (
+    Incident,
+    IncidentStatusRef,
+    AllowedTransition,
+    IncidentRoutingRule,
+)
+from references.models import (
+    Role,
+    BusinessUnit,
+    BaselEventType,
+)
 
 from incidents.serializers import (
     IncidentListSerializer,
@@ -289,6 +298,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.role_emp = Role.objects.create(name="Employee")
         self.role_mgr = Role.objects.create(name="Manager")
         self.role_risk = Role.objects.create(name="Risk Officer")
+        self.role_fraud = Role.objects.create(name="Fraud Investigator")
 
         self.status_draft = IncidentStatusRef.objects.create(
             code="DRAFT", name="Draft"
@@ -309,6 +319,10 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # --- Create BUs ---
         self.bu_retail = BusinessUnit.objects.create(name="Retail")
         self.bu_corp = BusinessUnit.objects.create(name="Corporate")
+        self.bu_fraud = BusinessUnit.objects.create(name="Fraud Unit")
+
+        # --- Add Basel Event for Routing Rule ---
+        self.event_fraud = BaselEventType.objects.create(name="External Fraud")
 
         # --- Create Users ---
         self.manager = create_user(
@@ -342,6 +356,13 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             password="testpsw123",
             role=self.role_emp,
             business_unit=self.bu_corp,
+        )
+        # --- Add a user to match the routing rule target ---
+        self.fraud_investigator = create_user(
+            email="fraud_team@example.com",
+            password="testpsw123",
+            role=self.role_fraud,
+            business_unit=self.bu_fraud,
         )
 
         # --- Create Incidents ---
@@ -393,6 +414,14 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             title="Emp1 Validated Incident",
             validated_by=self.risk_officer,  # Assume validated by RO
         )
+        # Incident for testing routing
+        self.incident_emp2_fraud = create_incident(
+            user=self.employee2,
+            status=self.status_draft,
+            business_unit=self.bu_retail,
+            title="Emp2 Fraud Incident",  # Will match routing rule
+            basel_event_type=self.event_fraud,
+        )
 
         # --- Configure State Machine ---
         AllowedTransition.objects.create(
@@ -429,6 +458,16 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             role=self.role_risk,  # Only Risk Officer can close
         )
 
+        # --- Create a specific, high-priority routing rule for testing ---
+        IncidentRoutingRule.objects.create(
+            description="Route all External Fraud to Fraud Team",
+            predicate={"basel_event_type_id": self.event_fraud.id},
+            route_to_role=self.fraud_investigator.role,
+            route_to_bu=self.fraud_investigator.business_unit,
+            priority=10,  # High priority
+            active=True,
+        )
+
     # --- Test Layer 1: Data Segregation (get_queryset) ---
 
     def test_employee_sees_only_own_incidents(self):
@@ -446,7 +485,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 6)  # emp1, emp2, and their own
+        self.assertEqual(len(res.data), 7)  # emp1, emp2, and their own
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
         self.assertIn("Emp2 Incident", titles)
@@ -459,7 +498,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            len(res.data), 6
+            len(res.data), 7
         )  # emp1, emp2, manager (all in bu_retail)
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
@@ -480,6 +519,26 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.incident_emp1.refresh_from_db()
         self.assertEqual(self.incident_emp1.status.code, "PENDING_REVIEW")
+        # Check fallback assignment - no routing
+        self.assertEqual(self.incident_emp1.assigned_to, self.manager)
+
+    def test_submit_incident_assigns_by_routing_rule(self):
+        """Test submit assigns to Fraud Investigator based on routing rule."""
+        self.client.force_authenticate(user=self.employee2)
+        url = reverse(
+            "incidents:incident-submit", args=[self.incident_emp2_fraud.id]
+        )
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp2_fraud.refresh_from_db()
+        self.assertEqual(
+            self.incident_emp2_fraud.status.code, "PENDING_REVIEW"
+        )
+        # Check routing assignment
+        self.assertEqual(
+            self.incident_emp2_fraud.assigned_to, self.fraud_investigator
+        )
 
     def test_employee_cannot_submit_other_incident(self):
         """Test an employee can NOT submit other's incident for review."""

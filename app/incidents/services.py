@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from .models import Incident, IncidentStatusRef, AllowedTransition
 from .workflows import validate_transition
+from .routing import evaluate_routing_for_incident
 
 User = get_user_model()
 
@@ -74,6 +75,43 @@ def _find_risk_officer(business_unit):
     return User.objects.filter(role__name="Risk Officer").first()
 
 
+# Consolidated helper function for routing logic
+def _get_incident_assignee(incident: Incident, reporter: User) -> User | None:
+    """
+    Determines the correct assignee for an incident based on routing priority.
+
+    Priority:
+    1. Custom routing rule (if it finds a specific user).
+    2. Incident reporter's manager.
+    3. None (if no rule matches and no manager).
+    """
+    # 1. Try to find a user based on custom routing rules
+    routing_result = evaluate_routing_for_incident(incident)
+
+    if routing_result:
+        role_id = routing_result.get("route_to_role_id")
+        bu_id = routing_result.get("route_to_bu_id")
+
+        if role_id or bu_id:
+            # Build the query to find a user matching the rule
+            query = User.objects.all()
+            if role_id:
+                query = query.filter(role_id=role_id)
+            if bu_id:
+                query = query.filter(business_unit_id=bu_id)
+
+            rule_based_user = query.first()
+            if rule_based_user:
+                return rule_based_user  # Found a user from a rule
+
+    # 2. Fallback: Reporter's manager
+    if reporter.manager:
+        return reporter.manager
+
+    # 3. Default
+    return None
+
+
 # --- Service Functions ---
 @transaction.atomic
 def create_incident(*, user: User, **kwargs) -> Incident:
@@ -99,13 +137,10 @@ def submit_incident(*, incident: Incident, user: User) -> Incident:
     pending_status = IncidentStatusRef.objects.get(code="PENDING_REVIEW")
     incident.status = pending_status
 
-    # Side-effect: Assign to manager if they exist
-    if user.manager:
-        incident.assigned_to = user.manager
+    # Clean incident routing logic
+    incident.assigned_to = _get_incident_assignee(incident, user)
 
     # Placeholder for future logic
-    # if incident.created_by.manager:
-    #     incident.assigned_to = incident.created_by.manager
     # calculate_sla(incident)
     # check_routing_rules(incident)
 
