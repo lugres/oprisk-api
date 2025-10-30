@@ -14,8 +14,8 @@ def evaluate_routing_for_incident(incident: Incident) -> dict | None:
 
     Returns:
         A dictionary containing
-        {"route_to_role_id": int | None, "route_to_bu_id": int |
-        None, "rule_id": int}
+        {"route_to_role_id": int | None, "route_to_bu_id": int | None,
+        "rule_id": int}
         or None if no rule matches.
     """
     # Fetch active rules ordered by priority (lower number = higher priority)

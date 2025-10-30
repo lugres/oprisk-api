@@ -11,6 +11,7 @@ from django.utils import timezone
 
 from .models import Incident, IncidentStatusRef, AllowedTransition
 from .workflows import validate_transition
+from .routing import evaluate_routing_for_incident
 
 User = get_user_model()
 
@@ -74,6 +75,27 @@ def _find_risk_officer(business_unit):
     return User.objects.filter(role__name="Risk Officer").first()
 
 
+def _find_user_from_routing(routing_result: dict) -> User | None:
+    """
+    Attempts to find a single user matching the routing rule.
+    Finds the first user that matches the combination of role and/or BU.
+    """
+    role_id = routing_result.get("route_to_role_id")
+    bu_id = routing_result.get("route_to_bu_id")
+
+    if not role_id and not bu_id:
+        # Rule is incomplete, no one to assign
+        return None
+
+    query = User.objects.all()
+    if role_id:
+        query = query.filter(role_id=role_id)
+    if bu_id:
+        query = query.filter(business_unit_id=bu_id)
+
+    return query.first()  # Returns the first matching user or None
+
+
 # --- Service Functions ---
 @transaction.atomic
 def create_incident(*, user: User, **kwargs) -> Incident:
@@ -99,9 +121,25 @@ def submit_incident(*, incident: Incident, user: User) -> Incident:
     pending_status = IncidentStatusRef.objects.get(code="PENDING_REVIEW")
     incident.status = pending_status
 
+    # --- New Routing Logic ---
+    assigned_user = None
+    routing_result = evaluate_routing_for_incident(incident)
+
+    if routing_result:
+        assigned_user = _find_user_from_routing(routing_result)
+
+    # Apply assignment: Rule > Manager > None
+    if assigned_user:
+        incident.assigned_to = assigned_user
+    elif user.manager:
+        incident.assigned_to = user.manager  # Fallback logic
+    else:
+        incident.assigned_to = None
+    # --- End New Routing Logic ---
+
     # Side-effect: Assign to manager if they exist
-    if user.manager:
-        incident.assigned_to = user.manager
+    # if user.manager:
+    #     incident.assigned_to = user.manager
 
     # Placeholder for future logic
     # if incident.created_by.manager:
