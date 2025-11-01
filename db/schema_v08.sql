@@ -45,7 +45,7 @@ CREATE TABLE basel_event_types (
     -- 7 top-level Basel categories (e.g. Internal Fraud, External Fraud, etc.)
 );
 
--- +
+-- + incidents
 -- simple event types (4 + other) are needed for early notifications based on routes
 -- selected by employee/manager in UI, mapped to basel types by ORM at validation
 -- a concept, not tested with sample data and queries
@@ -57,7 +57,7 @@ CREATE TABLE simplified_event_types_ref (
     is_active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
--- +
+-- + incidents
 -- eases mapping job for orm, basel types are needed for auditors & regulators
 CREATE TABLE simplified_to_basel_event_map (
     id SERIAL PRIMARY KEY,
@@ -90,6 +90,7 @@ CREATE TABLE risk_category_event_type (
   PRIMARY KEY (risk_category_id, basel_event_type_id)
 );
 
+-- + incidents
 CREATE TABLE loss_causes (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -118,6 +119,7 @@ CREATE TABLE products (
     business_unit_id INT REFERENCES business_units(id) ON DELETE SET NULL
 );
 
+-- + incidents
 -- status reference tables to ensure correct workflow
 CREATE TABLE incident_status_ref (
   id SERIAL PRIMARY KEY,
@@ -176,6 +178,7 @@ CREATE INDEX idx_risk_process ON risks(business_process_id);
 -- CREATE INDEX idx_risk_product ON risks(product_id);
 -- CREATE INDEX idx_risk_basel ON risks(basel_event_type_id);
 
+-- + incidents
 CREATE TABLE incidents (
     id SERIAL PRIMARY KEY,
     title VARCHAR(255),
@@ -321,6 +324,7 @@ CREATE TABLE incident_measure (
     PRIMARY KEY (incident_id, measure_id)
 );
 
+-- + incidents
 -- multiple causes per incident
 CREATE TABLE incident_cause (
     incident_id INT REFERENCES incidents(id) ON DELETE CASCADE,
@@ -356,6 +360,7 @@ CREATE TABLE incident_audit (
     new_data JSONB
 );
 
+-- + incidents
 -- simple custom routing for incidents based on JSON predicates 
 -- no queues, no stages for MVP; only applies at registration → verification.
 -- match by BU, category, amount (conditions can be combined)
@@ -371,6 +376,7 @@ CREATE TABLE incident_routing_rules (
     active BOOLEAN DEFAULT TRUE
 );
 
+-- + incidents
 -- fields that are required at each workflow stage (draft → review → validate)
 -- so frontend can read this matrix and show fields progressively.
 CREATE TABLE incident_required_fields (
@@ -382,6 +388,7 @@ CREATE TABLE incident_required_fields (
     PRIMARY KEY (status_id, field_name)
 );
 
+-- + incidents
 -- SLA for notifications
 CREATE TABLE sla_config (
     key VARCHAR(50) PRIMARY KEY,  -- e.g. draft_days, review_days, validation_days
@@ -389,6 +396,7 @@ CREATE TABLE sla_config (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- + notifications
 -- Unified notifications table (polymorphic: entity_type + entity_id), "logical event"
 -- will be used by a unified Django app serving all entities (incidents, measures, etc.)
 -- notifications are fired based on custom routing and SLA overdue
@@ -426,7 +434,7 @@ CREATE UNIQUE INDEX ux_notifications_active
 -- CREATE INDEX idx_notifications_recipient ON notifications(recipient_id);
 -- CREATE INDEX idx_notifications_role ON notifications(recipient_role_id);
 
-
+-- + notifications
 -- required for per-user red dot/bell/popup notification functionality in UI.
 CREATE TABLE user_notifications (
   id             BIGSERIAL PRIMARY KEY,

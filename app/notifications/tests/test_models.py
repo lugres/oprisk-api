@@ -2,12 +2,12 @@
 Tests for the models of the notifications app.
 """
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.contrib.auth import get_user_model
 from references.models import Role
 from incidents.models import Incident, IncidentStatusRef
-from .models import Notification, UserNotification
+from notifications.models import Notification, UserNotification
 
 User = get_user_model()
 
@@ -41,7 +41,7 @@ class NotificationModelTests(TestCase):
         self.assertTrue(notification.active)
         self.assertEqual(
             str(notification),
-            f"ROUTING_NOTIFY for incident {self.incident.id}",
+            f"ROUTING_NOTIFY for INCIDENT {self.incident.id}",
         )
 
     def test_user_notification_link(self):
@@ -69,19 +69,22 @@ class NotificationModelTests(TestCase):
             event_type=Notification.EventType.INCIDENT_OVERDUE,
             sla_stage=Notification.SlaStage.DRAFT,
             recipient_role=self.role,
+            recipient=self.user,
             active=True,
         )
 
         # Try to create an identical active notification
         with self.assertRaises(IntegrityError):
-            Notification.objects.create(
-                entity_type=Notification.EntityType.INCIDENT,
-                entity_id=self.incident.id,
-                event_type=Notification.EventType.INCIDENT_OVERDUE,
-                sla_stage=Notification.SlaStage.DRAFT,
-                recipient_role=self.role,
-                active=True,  # Fails because this is active
-            )
+            with transaction.atomic():  # atomic transaction needed
+                Notification.objects.create(
+                    entity_type=Notification.EntityType.INCIDENT,
+                    entity_id=self.incident.id,
+                    event_type=Notification.EventType.INCIDENT_OVERDUE,
+                    sla_stage=Notification.SlaStage.DRAFT,
+                    recipient_role=self.role,
+                    recipient=self.user,
+                    active=True,  # Fails because this is active
+                )
 
         # Creating a *non-active* duplicate is allowed
         Notification.objects.create(
@@ -90,6 +93,7 @@ class NotificationModelTests(TestCase):
             event_type=Notification.EventType.INCIDENT_OVERDUE,
             sla_stage=Notification.SlaStage.DRAFT,
             recipient_role=self.role,
+            recipient=self.user,
             active=False,  # This should pass
         )
 
