@@ -15,7 +15,6 @@ class NotificationAdmin(admin.ModelAdmin):
         "entity_type",
         "entity_id",
         "event_type",
-        "recipient",
         "recipient_role",
         "status",
         "created_at",

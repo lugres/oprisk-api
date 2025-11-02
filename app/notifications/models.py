@@ -47,9 +47,15 @@ class Notification(models.Model):
         FAILED = "failed", "Failed"
         CANCELED = "canceled", "Canceled"
 
+    class Priority(models.TextChoices):
+        LOW = "LOW", "Low"
+        MEDIUM = "MEDIUM", "Medium"
+        HIGH = "HIGH", "High"
+        CRITICAL = "CRITICAL", "Critical"
+
     # Polymorphic link to the source entity (e.g., an Incident)
     entity_type = models.CharField(
-        max_length=20,
+        max_length=30,
         choices=EntityType.choices,
     )  # e.g., 'incident', 'measure'
     entity_id = models.IntegerField()
@@ -57,7 +63,7 @@ class Notification(models.Model):
     # What triggered this?
     event_type = models.CharField(max_length=50, choices=EventType.choices)
     sla_stage = models.CharField(
-        max_length=20, choices=SlaStage.choices, blank=True, null=True
+        max_length=30, choices=SlaStage.choices, blank=True, null=True
     )
     routing_rule_id = models.IntegerField(blank=True, null=True)
     triggered_by = models.ForeignKey(
@@ -68,19 +74,13 @@ class Notification(models.Model):
         related_name="triggered_notifications",
     )
 
-    # Who is this for? (Can be one or multiple)
-    recipient = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,  # notification is gone if recipient deleted
-        null=True,
-        blank=True,
-        related_name="notifications",
-    )
+    # Who is this for?
     recipient_role = models.ForeignKey(
         "references.Role",  # Use string path to avoid circular import
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
+        help_text="Notification is intended for this role(audit).",
     )
 
     # When?
@@ -94,6 +94,13 @@ class Notification(models.Model):
         max_length=30, choices=Method.choices, default=Method.SYSTEM
     )
     payload = models.JSONField(blank=True, null=True)  # Extra context
+
+    # Risk Management Fields
+    priority = models.CharField(
+        max_length=20, choices=Priority.choices, default=Priority.MEDIUM
+    )
+    requires_action = models.BooleanField(default=False)
+    action_url = models.CharField(max_length=500, blank=True, null=True)
 
     # State
     status = models.CharField(
@@ -114,7 +121,6 @@ class Notification(models.Model):
                     "entity_id",
                     "event_type",
                     "sla_stage",
-                    "recipient",
                     "recipient_role",
                 ],
                 condition=Q(active=True),

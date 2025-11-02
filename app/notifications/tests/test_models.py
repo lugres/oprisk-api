@@ -51,7 +51,6 @@ class NotificationModelTests(TestCase):
             entity_type=Notification.EntityType.INCIDENT,
             entity_id=self.incident.id,
             event_type=Notification.EventType.CUSTOM,
-            recipient=self.user,
         )
         user_notif = UserNotification.objects.create(
             notification=notification, user=self.user
@@ -70,7 +69,6 @@ class NotificationModelTests(TestCase):
             event_type=Notification.EventType.INCIDENT_OVERDUE,
             sla_stage=Notification.SlaStage.DRAFT,
             recipient_role=self.role,
-            recipient=self.user,
             active=True,
         )
 
@@ -83,7 +81,6 @@ class NotificationModelTests(TestCase):
                     event_type=Notification.EventType.INCIDENT_OVERDUE,
                     sla_stage=Notification.SlaStage.DRAFT,
                     recipient_role=self.role,
-                    recipient=self.user,
                     active=True,  # Fails because this is active
                 )
 
@@ -94,7 +91,6 @@ class NotificationModelTests(TestCase):
             event_type=Notification.EventType.INCIDENT_OVERDUE,
             sla_stage=Notification.SlaStage.DRAFT,
             recipient_role=self.role,
-            recipient=self.user,
             active=False,  # This should pass
         )
 
@@ -121,7 +117,6 @@ class NotificationModelTests(TestCase):
             entity_type=Notification.EntityType.INCIDENT,
             entity_id=self.incident.id,
             event_type=Notification.EventType.CUSTOM,
-            recipient=self.user,
         )
         user_notif = UserNotification.objects.create(
             notification=notification, user=self.user
@@ -218,7 +213,6 @@ class NotificationModelTests(TestCase):
             entity_type=Notification.EntityType.INCIDENT,
             entity_id=self.incident.id,
             event_type=Notification.EventType.INCIDENT_OVERDUE,
-            recipient=self.user,
         )
 
         self.assertEqual(notification.status, Notification.Status.QUEUED)
@@ -239,7 +233,6 @@ class NotificationModelTests(TestCase):
             entity_type=Notification.EntityType.MEASURE,
             entity_id=999,
             event_type=Notification.EventType.MEASURE_OVERDUE,
-            recipient=self.user,
             method=Notification.Method.EMAIL,
         )
 
@@ -252,36 +245,6 @@ class NotificationModelTests(TestCase):
         self.assertEqual(notification.status, Notification.Status.FAILED)
         self.assertEqual(notification.attempts, 3)
         self.assertIn("timeout", notification.last_error)
-
-    def test_notification_unique_constraint_null_handling(self):
-        """Test unique constraint with NULL values."""
-        # Create notification with only recipient (no role)
-        n1 = Notification.objects.create(
-            entity_type=Notification.EntityType.INCIDENT,
-            entity_id=self.incident.id,
-            event_type=Notification.EventType.INCIDENT_OVERDUE,
-            sla_stage=Notification.SlaStage.DRAFT,
-            recipient=self.user,
-            recipient_role=None,
-            active=True,
-        )
-
-        # Should allow another active notification with same params
-        # but different recipient
-        user2 = User.objects.create_user(
-            email="user2@test.com", password="pass"
-        )
-        n2 = Notification.objects.create(
-            entity_type=Notification.EntityType.INCIDENT,
-            entity_id=self.incident.id,
-            event_type=Notification.EventType.INCIDENT_OVERDUE,
-            sla_stage=Notification.SlaStage.DRAFT,
-            recipient=user2,
-            recipient_role=None,
-            active=True,
-        )
-
-        self.assertNotEqual(n1.id, n2.id)
 
     def test_notification_ordering(self):
         """Test notifications are ordered by created_at descending."""
@@ -315,3 +278,33 @@ class NotificationModelTests(TestCase):
 
         notification.refresh_from_db()
         self.assertEqual(notification.payload, payload)
+
+    def test_notification_risk_and_action_fields(self):
+        """Test the priority, requires_action, and action_url fields."""
+        payload_url = "/incidents/review/123"
+        notification = Notification.objects.create(
+            entity_type=Notification.EntityType.INCIDENT,
+            entity_id=self.incident.id,
+            event_type=Notification.EventType.ROUTING_NOTIFY,
+            recipient_role=self.role,
+            # Set the new fields
+            priority=Notification.Priority.HIGH,
+            requires_action=True,
+            action_url=payload_url,
+        )
+
+        notification.refresh_from_db()
+
+        self.assertEqual(notification.priority, Notification.Priority.HIGH)
+        self.assertTrue(notification.requires_action)
+        self.assertEqual(notification.action_url, payload_url)
+
+    def test_notification_priority_default(self):
+        """Test that priority defaults to MEDIUM."""
+        notification = Notification.objects.create(
+            entity_type=Notification.EntityType.INCIDENT,
+            entity_id=self.incident.id,
+            event_type=Notification.EventType.CUSTOM,
+            recipient_role=self.role,
+        )
+        self.assertEqual(notification.priority, Notification.Priority.MEDIUM)
