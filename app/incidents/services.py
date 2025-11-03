@@ -12,6 +12,7 @@ from django.utils import timezone
 from .models import Incident, IncidentStatusRef, AllowedTransition
 from .workflows import validate_transition
 from .routing import evaluate_routing_for_incident
+from notifications.models import Notification
 
 User = get_user_model()
 
@@ -75,44 +76,9 @@ def _find_risk_officer(business_unit):
     return User.objects.filter(role__name="Risk Officer").first()
 
 
-# Consolidated helper function for routing logic
-def _get_incident_assignee(incident: Incident, reporter: User) -> User | None:
-    """
-    Determines the correct assignee for an incident based on routing priority.
-
-    Priority:
-    1. Custom routing rule (if it finds a specific user).
-    2. Incident reporter's manager.
-    3. None (if no rule matches and no manager).
-    """
-    # 1. Try to find a user based on custom routing rules
-    routing_result = evaluate_routing_for_incident(incident)
-
-    if routing_result:
-        role_id = routing_result.get("route_to_role_id")
-        bu_id = routing_result.get("route_to_bu_id")
-
-        if role_id or bu_id:
-            # Build the query to find a user matching the rule
-            query = User.objects.all()
-            if role_id:
-                query = query.filter(role_id=role_id)
-            if bu_id:
-                query = query.filter(business_unit_id=bu_id)
-
-            rule_based_user = query.first()
-            if rule_based_user:
-                return rule_based_user  # Found a user from a rule
-
-    # 2. Fallback: Reporter's manager
-    if reporter.manager:
-        return reporter.manager
-
-    # 3. Default
-    return None
-
-
 # --- Service Functions ---
+
+
 @transaction.atomic
 def create_incident(*, user: User, **kwargs) -> Incident:
     """Service function to create a new incident with default DRAFT status."""
@@ -137,8 +103,15 @@ def submit_incident(*, incident: Incident, user: User) -> Incident:
     pending_status = IncidentStatusRef.objects.get(code="PENDING_REVIEW")
     incident.status = pending_status
 
-    # Clean incident routing logic
-    incident.assigned_to = _get_incident_assignee(incident, user)
+    # --- Reverted Logic ---
+    # Primary workflow stays unchanged (Employee -> Manager -> Risk),
+    # instead a notification is triggered when routing rule is matched.
+    # Assignment is now simple: just assign to the manager.
+    if user.manager:
+        incident.assigned_to = user.manager
+    else:
+        incident.assigned_to = None  # Or assign to a default review pool
+    # --- End Reverted Logic ---
 
     # Placeholder for future logic
     # calculate_sla(incident)
@@ -168,6 +141,29 @@ def review_incident(*, incident: Incident, user: User) -> Incident:
     incident.save(
         update_fields=["status", "assigned_to", "reviewed_by", "updated_at"]
     )
+
+    # --- Parallel Workflow (Awareness) ---
+    routing_result = evaluate_routing_for_incident(incident)
+    if routing_result:
+        # A rule matched. Create a notification.
+        Notification.objects.create(
+            entity_type=Notification.EntityType.INCIDENT,
+            entity_id=incident.id,
+            event_type=Notification.EventType.ROUTING_NOTIFY,
+            triggered_by=user,
+            recipient_role_id=routing_result.get("route_to_role_id"),
+            # Note: recipient_role_id is used to match the routing rule's
+            # A Celery task would later find all users with this role
+            # and create UserNotification entries for them.
+            routing_rule_id=routing_result.get("rule_id"),
+            payload={
+                "title": incident.title,
+                "message": f"Incident '{incident.title}' was reviewed "
+                f"and requires awareness.",
+                "incident_url": f"/incidents/{incident.id}/",  # Example pld
+            },
+        )
+
     return incident
 
 
