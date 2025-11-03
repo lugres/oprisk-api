@@ -16,11 +16,12 @@ from incidents.models import (
     IncidentStatusRef,
     AllowedTransition,
     IncidentRoutingRule,
+    SimplifiedEventTypeRef,
 )
 from references.models import (
     Role,
     BusinessUnit,
-    BaselEventType,
+    # BaselEventType,
 )
 
 from incidents.serializers import (
@@ -319,10 +320,9 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # --- Create BUs ---
         self.bu_retail = BusinessUnit.objects.create(name="Retail")
         self.bu_corp = BusinessUnit.objects.create(name="Corporate")
-        self.bu_fraud = BusinessUnit.objects.create(name="Fraud Unit")
 
-        # --- Add Basel Event for Routing Rule ---
-        self.event_fraud = BaselEventType.objects.create(name="External Fraud")
+        # --- Add Event for Routing Rule ---
+        self.event_fraud = SimplifiedEventTypeRef.objects.create(name="Fraud")
 
         # --- Create Users ---
         self.manager = create_user(
@@ -356,13 +356,6 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             password="testpsw123",
             role=self.role_emp,
             business_unit=self.bu_corp,
-        )
-        # --- Add a user to match the routing rule target ---
-        self.fraud_investigator = create_user(
-            email="fraud_team@example.com",
-            password="testpsw123",
-            role=self.role_fraud,
-            business_unit=self.bu_fraud,
         )
 
         # --- Create Incidents ---
@@ -415,12 +408,12 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             validated_by=self.risk_officer,  # Assume validated by RO
         )
         # Incident for testing routing
-        self.incident_emp2_fraud = create_incident(
+        self.incident_emp2_fraud_review = create_incident(
             user=self.employee2,
-            status=self.status_draft,
+            status=self.status_pending_review,
             business_unit=self.bu_retail,
-            title="Emp2 Fraud Incident",  # Will match routing rule
-            basel_event_type=self.event_fraud,
+            title="Emp2 Fraud Incident for review",  # Will match routing rule
+            simplified_event_type=self.event_fraud,
         )
 
         # --- Configure State Machine ---
@@ -460,10 +453,9 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         # --- Create a specific, high-priority routing rule for testing ---
         IncidentRoutingRule.objects.create(
-            description="Route all External Fraud to Fraud Team",
-            predicate={"basel_event_type_id": self.event_fraud.id},
-            route_to_role=self.fraud_investigator.role,
-            route_to_bu=self.fraud_investigator.business_unit,
+            description="Route all Fraud to Fraud Team",
+            predicate={"simplified_event_type": self.event_fraud.id},
+            route_to_role=self.role_fraud,
             priority=10,  # High priority
             active=True,
         )
@@ -522,23 +514,41 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # Check fallback assignment - no routing
         self.assertEqual(self.incident_emp1.assigned_to, self.manager)
 
-    def test_submit_incident_assigns_by_routing_rule(self):
-        """Test submit assigns to Fraud Investigator based on routing rule."""
-        self.client.force_authenticate(user=self.employee2)
+    def test_review_incident_creates_notification_on_route_match(self):
+        """Test that reviewing an incident creates a
+        Notification if a rule matches."""
+        # Use the new, robust notification model
+        from notifications.models import Notification
+
+        self.client.force_authenticate(user=self.manager)
         url = reverse(
-            "incidents:incident-submit", args=[self.incident_emp2_fraud.id]
+            "incidents:incident-review",
+            args=[self.incident_emp2_fraud_review.id],
         )
+
+        self.assertEqual(Notification.objects.count(), 0)  # Pre-condition
+
         res = self.client.post(url)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.incident_emp2_fraud.refresh_from_db()
+
+        # Check that a notification was created
+        self.assertEqual(Notification.objects.count(), 1)
+        notification = Notification.objects.first()
+
+        # Verify the new polymorphic and queue fields
         self.assertEqual(
-            self.incident_emp2_fraud.status.code, "PENDING_REVIEW"
+            notification.entity_type, Notification.EntityType.INCIDENT
         )
-        # Check routing assignment
         self.assertEqual(
-            self.incident_emp2_fraud.assigned_to, self.fraud_investigator
+            notification.entity_id, self.incident_emp2_fraud_review.id
         )
+        self.assertEqual(
+            notification.event_type, Notification.EventType.ROUTING_NOTIFY
+        )
+        self.assertEqual(notification.status, Notification.Status.QUEUED)
+        self.assertEqual(notification.triggered_by, self.manager)
+        self.assertEqual(notification.recipient_role_id, self.role_fraud.id)
 
     def test_employee_cannot_submit_other_incident(self):
         """Test an employee can NOT submit other's incident for review."""

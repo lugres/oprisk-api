@@ -7,8 +7,12 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 
 # Import models needed for setup and routing logic
-from incidents.models import Incident, IncidentRoutingRule
-from references.models import Role, BusinessUnit, BaselEventType
+from incidents.models import (
+    Incident,
+    IncidentRoutingRule,
+    SimplifiedEventTypeRef,
+)
+from references.models import Role, BusinessUnit  # , BaselEventType
 
 # Import the routing evaluation function (to be created)
 from incidents.routing import evaluate_routing_for_incident
@@ -35,15 +39,27 @@ class IncidentRoutingEvaluationTests(TestCase):
             name="Fraud Unit"
         )  # For Rule C target
 
-        cls.event_it_disruption = BaselEventType.objects.create(
-            name="Business Disruption & System Failures"
+        # Simplified event types for early stage (submit/review)
+        cls.event_simple_it_disruption = SimplifiedEventTypeRef.objects.create(
+            name="IT / Data / Cyber"
         )
-        cls.event_ext_fraud = BaselEventType.objects.create(
-            name="External Fraud"
+        cls.event_simple_fraud = SimplifiedEventTypeRef.objects.create(
+            name="Fraud"
         )
-        cls.event_other = BaselEventType.objects.create(
-            name="Damage Physical Assets"
+        cls.event_simple_other = SimplifiedEventTypeRef.objects.create(
+            name="Other / Unsure"
         )  # Non-matching event
+
+        # This is now for 'phase 2' routing (validate)
+        # cls.event_it_disruption = BaselEventType.objects.create(
+        #     name="Business Disruption & System Failures"
+        # )
+        # cls.event_ext_fraud = BaselEventType.objects.create(
+        #     name="External Fraud"
+        # )
+        # cls.event_other = BaselEventType.objects.create(
+        #     name="Damage Physical Assets"
+        # )  # Non-matching event
 
         cls.role_infosec = Role.objects.create(name="InfoSec")
         cls.role_fraud_inv = Role.objects.create(name="Fraud Investigator")
@@ -67,7 +83,7 @@ class IncidentRoutingEvaluationTests(TestCase):
         cls.rule_b = IncidentRoutingRule.objects.create(
             description="IT/security events in Retail -> InfoSec",
             predicate={
-                "basel_event_type_id": cls.event_it_disruption.id,
+                "simplified_event_type_id": cls.event_simple_it_disruption.id,
                 "business_unit_id": cls.bu_retail.id,
             },
             route_to_role=cls.role_infosec,
@@ -78,8 +94,8 @@ class IncidentRoutingEvaluationTests(TestCase):
         # Rule C: All external fraud incidents -> Fraud Role + BU
         # (Medium-Low Priority)
         cls.rule_c = IncidentRoutingRule.objects.create(
-            description="External fraud -> Fraud Investigation Unit",
-            predicate={"basel_event_type_id": cls.event_ext_fraud.id},
+            description="Fraud -> Fraud Investigation Unit",
+            predicate={"simplified_event_type_id": cls.event_simple_fraud.id},
             route_to_role=cls.role_fraud_inv,
             route_to_bu=cls.bu_fraud,
             priority=15,
@@ -100,7 +116,7 @@ class IncidentRoutingEvaluationTests(TestCase):
         cls.incident_for_rule_a = Incident(
             title="Large Loss Incident",
             business_unit=cls.bu_corp,  # Doesn't matter for this rule
-            basel_event_type=cls.event_other,  # Doesn't matter
+            simplified_event_type=cls.event_simple_other,  # Doesn't matter
             gross_loss_amount=Decimal("2000000.00"),
         )
 
@@ -108,7 +124,7 @@ class IncidentRoutingEvaluationTests(TestCase):
         cls.incident_for_rule_b = Incident(
             title="Retail IT Outage",
             business_unit=cls.bu_retail,
-            basel_event_type=cls.event_it_disruption,
+            simplified_event_type=cls.event_simple_it_disruption,
             gross_loss_amount=Decimal("50000.00"),  # Below Rule A threshold
         )
 
@@ -116,7 +132,7 @@ class IncidentRoutingEvaluationTests(TestCase):
         cls.incident_for_rule_c = Incident(
             title="Corp Card Fraud",
             business_unit=cls.bu_corp,  # Different BU
-            basel_event_type=cls.event_ext_fraud,
+            simplified_event_type=cls.event_simple_fraud,
             gross_loss_amount=Decimal("25000.00"),  # Below Rule A threshold
         )
 
@@ -125,7 +141,7 @@ class IncidentRoutingEvaluationTests(TestCase):
         cls.incident_for_rule_d = Incident(
             title="Minor Retail Issue",
             business_unit=cls.bu_retail,
-            basel_event_type=cls.event_other,  # Doesn't match B or C
+            simplified_event_type=cls.event_simple_other,  # No match B or C
             gross_loss_amount=Decimal("100.00"),  # Doesn't match A
         )
 
@@ -134,7 +150,7 @@ class IncidentRoutingEvaluationTests(TestCase):
         cls.incident_no_match = Incident(
             title="Corp Asset Damage",
             business_unit=cls.bu_corp,
-            basel_event_type=cls.event_other,
+            simplified_event_type=cls.event_simple_other,
             gross_loss_amount=Decimal("500.00"),
         )
 
@@ -142,7 +158,7 @@ class IncidentRoutingEvaluationTests(TestCase):
         cls.incident_missing_amount = Incident(
             title="Retail Fraud - Amount TBD",
             business_unit=cls.bu_retail,
-            basel_event_type=cls.event_ext_fraud,  # Could match Rule C
+            simplified_event_type=cls.event_simple_fraud,  # Could match Rule C
             gross_loss_amount=None,
         )
 
@@ -200,7 +216,7 @@ class IncidentRoutingEvaluationTests(TestCase):
     def test_routing_handles_missing_amount_correctly(self):
         """Test missing amount prevents matching Rule A,
         falls back correctly."""
-        # This incident has event=External Fraud, so it should match Rule C
+        # This incident has event=Fraud, so it should match Rule C
         routing_result = evaluate_routing_for_incident(
             self.incident_missing_amount
         )

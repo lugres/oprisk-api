@@ -43,20 +43,35 @@ def evaluate_routing_for_incident(incident: Incident) -> dict | None:
                 # rule doesn't match
                 match = False
 
-        # 2. basel_event_type_id
+        # 2. simplified_event_type_id
         # (check only if previous conditions still match)
-        if match and "basel_event_type_id" in predicate:
+        if match and "simplified_event_type_id" in predicate:
             try:
                 # Ensure predicate value is an integer
-                predicate_event_id = int(predicate["basel_event_type_id"])
+                predicate_event_id = int(predicate["simplified_event_type_id"])
                 # Check if incident's event type ID matches
                 if (
-                    not incident.basel_event_type_id
-                    or incident.basel_event_type_id != predicate_event_id
+                    not incident.simplified_event_type_id
+                    or incident.simplified_event_type_id != predicate_event_id
                 ):
                     match = False
             except (TypeError, ValueError):
                 match = False  # Predicate value is not a valid int
+
+        # 2. basel_event_type_id - now phase 2, commented out
+        # (check only if previous conditions still match)
+        # if match and "basel_event_type_id" in predicate:
+        #     try:
+        #         # Ensure predicate value is an integer
+        #         predicate_event_id = int(predicate["basel_event_type_id"])
+        #         # Check if incident's event type ID matches
+        #         if (
+        #             not incident.basel_event_type_id
+        #             or incident.basel_event_type_id != predicate_event_id
+        #         ):
+        #             match = False
+        #     except (TypeError, ValueError):
+        #         match = False  # Predicate value is not a valid int
 
         # 3. business_unit_id (check only if previous conditions still match)
         if match and "business_unit_id" in predicate:
