@@ -3,10 +3,12 @@ Tests for incidents API.
 """
 
 from decimal import Decimal
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -17,6 +19,7 @@ from incidents.models import (
     AllowedTransition,
     IncidentRoutingRule,
     SimplifiedEventTypeRef,
+    SlaConfig,
 )
 from references.models import (
     Role,
@@ -88,6 +91,8 @@ class PrivateIncidentApiTests(TestCase):
         self.status_pending = IncidentStatusRef.objects.create(
             code="PENDING_REVIEW", name="Pending"
         )
+        # Adding draft SLA
+        SlaConfig.objects.create(key="draft_days", value_int=7)
 
     def test_retrieve_incidents(self):
         """Test retrieving a list of incidents."""
@@ -177,13 +182,18 @@ class PrivateIncidentApiTests(TestCase):
             "gross_loss_amount": Decimal("199.99"),
             "currency_code": "EUR",
         }
-        res = self.client.post(INCIDENTS_LIST_URL, payload)
+        test_time = timezone.now()
+        with self.settings(NOW_OVERRIDE=test_time):
+            res = self.client.post(INCIDENTS_LIST_URL, payload)
 
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         incident = Incident.objects.get(id=res.data["id"])
         self.assertEqual(incident.title, payload["title"])
         self.assertEqual(incident.status.code, self.status_draft.code)
         self.assertEqual(incident.created_by, self.user)
+        # Check SLA logic
+        expected_due_date = (test_time + timedelta(days=7)).date()
+        self.assertEqual(incident.draft_due_at.date(), expected_due_date)
 
     def test_partial_update_incident(self):
         """Test partial update of an incident with PATCH."""
@@ -460,6 +470,11 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             active=True,
         )
 
+        # --- Configure SLA ---
+        SlaConfig.objects.create(key="draft_days", value_int=7)
+        SlaConfig.objects.create(key="review_days", value_int=5)
+        SlaConfig.objects.create(key="validation_days", value_int=10)
+
     # --- Test Layer 1: Data Segregation (get_queryset) ---
 
     def test_employee_sees_only_own_incidents(self):
@@ -625,7 +640,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
     # --- Tests for 'return' actions ---
     def test_manager_can_return_to_draft_with_reason(self):
         """Test manager can return an incident (PENDING_REVIEW to DRAFT).
-        Reason is required."""
+        Reason is required. draft_due_at is recomputed."""
         self.client.force_authenticate(user=self.manager)
         url = reverse(
             "incidents:incident-return-to-draft",
@@ -633,7 +648,9 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         )
         # Include a reason in the payload
         payload = {"reason": "Needs more details in description."}
-        res = self.client.post(url, payload)
+        test_time = timezone.now()
+        with self.settings(NOW_OVERRIDE=test_time):
+            res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.incident_emp2_pending_review.refresh_from_db()
@@ -650,6 +667,12 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         )
         self.assertIn(
             self.manager.email, self.incident_emp2_pending_review.notes
+        )
+        # Check SLA logic
+        expected_due_date = (test_time + timedelta(days=7)).date()
+        self.assertEqual(
+            self.incident_emp2_pending_review.draft_due_at.date(),
+            expected_due_date,
         )
 
     def test_return_to_draft_fails_without_reason(self):
@@ -703,14 +726,17 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_risk_officer_can_return_to_review_with_reason(self):
-        """Test Risk Officer successfully returns incident with reason."""
+        """Test Risk Officer successfully returns incident with reason.
+        review_due_at is recomputed."""
         self.client.force_authenticate(user=self.risk_officer)
         url = reverse(
             "incidents:incident-return-to-review",
             args=[self.incident_emp1_pending_validation.id],
         )
         payload = {"reason": "Incorrect category assigned."}
-        res = self.client.post(url, payload)
+        test_time = timezone.now()
+        with self.settings(NOW_OVERRIDE=test_time):
+            res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.incident_emp1_pending_validation.refresh_from_db()
@@ -729,6 +755,12 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertIn(
             self.risk_officer.email,
             self.incident_emp1_pending_validation.notes,
+        )
+        # Check SLA logic
+        expected_due_date = (test_time + timedelta(days=5)).date()
+        self.assertEqual(
+            self.incident_emp1_pending_validation.review_due_at.date(),
+            expected_due_date,
         )
 
     def test_return_to_review_fails_without_reason(self):
