@@ -20,11 +20,13 @@ from incidents.models import (
     IncidentRoutingRule,
     SimplifiedEventTypeRef,
     SlaConfig,
+    IncidentRequiredField,
 )
 from references.models import (
     Role,
     BusinessUnit,
-    # BaselEventType,
+    BaselEventType,
+    BusinessProcess,
 )
 
 from incidents.serializers import (
@@ -306,6 +308,12 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # --- Add Event for Routing Rule ---
         self.event_fraud = SimplifiedEventTypeRef.objects.create(name="Fraud")
 
+        # --- Add Data for Dynamic Field Validation ---
+        self.process_cards = BusinessProcess.objects.create(
+            name="Credit Cards", business_unit=self.bu_retail
+        )
+        self.basel_fraud = BaselEventType.objects.create(name="External Fraud")
+
         # --- Create Users ---
         self.manager = create_user(
             email="manager@example.com",
@@ -345,6 +353,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             user=self.employee1,
             status=self.status_draft,
             business_unit=self.bu_retail,
+            business_process=self.process_cards,  # Updated for dyn flds
             title="Emp1 Incident",
         )
         self.incident_emp2 = create_incident(
@@ -397,6 +406,23 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             title="Emp2 Fraud Incident for review",  # Will match routing rule
             simplified_event_type=self.event_fraud,
         )
+        # Incident for submit test that is MISSING data
+        self.incident_emp1_draft_missing_data = create_incident(
+            user=self.employee1,
+            status=self.status_draft,
+            business_unit=self.bu_retail,
+            title="Emp1 Draft Missing Process",
+            # business_process is NULL
+        )
+        # Incident for review test that is MISSING product
+        self.incident_emp2_review_missing_amount = create_incident(
+            user=self.employee2,
+            status=self.status_pending_review,
+            business_unit=self.bu_retail,
+            title="Emp2 Review Missing Product",
+            basel_event_type=self.basel_fraud,
+            product=None,  # Explicitly NULL
+        )
 
         # --- Configure State Machine ---
         AllowedTransition.objects.create(
@@ -447,6 +473,20 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         SlaConfig.objects.create(key="review_days", value_int=5)
         SlaConfig.objects.create(key="validation_days", value_int=10)
 
+        # --- Configure Required Fields ---
+        IncidentRequiredField.objects.create(
+            status=self.status_pending_review,  # Target status for submit
+            field_name="business_process",  # Field required to submit
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_pending_validation,  # Target status for review
+            field_name="product",
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_pending_validation,  # Target status for review
+            field_name="basel_event_type",
+        )
+
     # --- Test Layer 1: Data Segregation (get_queryset) ---
 
     def test_employee_sees_only_own_incidents(self):
@@ -455,8 +495,8 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 3)
-        self.assertEqual(res.data[2]["title"], "Emp1 Incident")
+        self.assertEqual(len(res.data), 4)
+        self.assertEqual(res.data[3]["title"], "Emp1 Incident")
 
     def test_manager_sees_own_and_team_incidents(self):
         """Test a manager can see only his team's incidents and his own."""
@@ -464,7 +504,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 7)  # emp1, emp2, and their own
+        self.assertEqual(len(res.data), 9)  # emp1, emp2, and their own
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
         self.assertIn("Emp2 Incident", titles)
@@ -477,7 +517,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            len(res.data), 7
+            len(res.data), 9
         )  # emp1, emp2, manager (all in bu_retail)
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
@@ -810,6 +850,44 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         # Should fail Layer 2 permission check (IsRoleRiskOfficer needed)
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    # --- Tests for Dynamic Field Validation (Layer 2.5) ---
+
+    def test_submit_fails_if_required_field_is_missing(self):
+        """Test submit action fails if 'business_process_id' is missing."""
+        self.client.force_authenticate(user=self.employee1)
+        url = reverse(
+            "incidents:incident-submit",
+            args=[self.incident_emp1_draft_missing_data.id],
+        )
+        res = self.client.post(url)
+
+        # This is a validation failure, so expect 400
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", res.data)
+        # Check that the error message clearly identifies the missing field
+        self.assertIn("business_process_id", res.data["error"])
+        self.assertIn("required for PENDING_REVIEW", res.data["error"])
+
+        # Also ensure the status did NOT change
+        self.incident_emp1_draft_missing_data.refresh_from_db()
+        self.assertEqual(
+            self.incident_emp1_draft_missing_data.status, self.status_draft
+        )
+
+    def test_review_fails_if_required_field_is_missing(self):
+        """Test review action fails if 'gross_loss_amount' is NULL."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-review",
+            args=[self.incident_emp2_review_missing_amount.id],
+        )
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", res.data)
+        self.assertIn("gross_loss_amount", res.data["error"])
+        self.assertIn("required for PENDING_VALIDATION", res.data["error"])
 
     # --- Test Layer 3: Domain Logic (workflow.py) ---
 
