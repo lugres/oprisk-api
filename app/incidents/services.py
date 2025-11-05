@@ -101,6 +101,8 @@ def create_incident(*, user: User, **kwargs) -> Incident:
     draft_days = _get_sla_days(key="draft_days", default=7)
     draft_due_at = timezone.now() + timedelta(days=draft_days)
     kwargs.pop("draft_due_at", None)
+    kwargs["review_due_at"] = None
+    kwargs["validation_due_at"] = None
 
     return Incident.objects.create(
         created_by=user,
@@ -136,13 +138,20 @@ def submit_incident(*, incident: Incident, user: User) -> Incident:
     # --- SLA logic ---
     review_days = _get_sla_days(key="review_days", default=5)
     incident.review_due_at = timezone.now() + timedelta(days=review_days)
+    incident.draft_due_at = None  # Clear old timer
 
     # Placeholder for future logic
     # calculate_sla(incident)
     # check_routing_rules(incident)
 
     incident.save(
-        update_fields=["status", "assigned_to", "updated_at", "review_due_at"]
+        update_fields=[
+            "status",
+            "assigned_to",
+            "updated_at",
+            "review_due_at",
+            "draft_due_at",
+        ]
     )
     return incident
 
@@ -172,6 +181,7 @@ def review_incident(*, incident: Incident, user: User) -> Incident:
     incident.validation_due_at = timezone.now() + timedelta(
         days=validation_days
     )
+    incident.review_due_at = None  # Clear old timer
 
     incident.save(
         update_fields=[
@@ -180,6 +190,7 @@ def review_incident(*, incident: Incident, user: User) -> Incident:
             "reviewed_by",
             "updated_at",
             "validation_due_at",
+            "review_due_at",
         ]
     )
 
@@ -225,6 +236,9 @@ def validate_incident(*, incident: Incident, user: User) -> Incident:
     incident.validated_at = timezone.now()
     incident.assigned_to = None
 
+    # --- SLA logic ---
+    incident.validation_due_at = None  # Clear old timer
+
     incident.save(
         update_fields=[
             "status",
@@ -232,6 +246,7 @@ def validate_incident(*, incident: Incident, user: User) -> Incident:
             "validated_at",
             "assigned_to",
             "updated_at",
+            "validation_due_at",
         ]
     )
     return incident
@@ -266,6 +281,7 @@ def return_to_draft(
     # --- SLA logic ---
     draft_days = _get_sla_days(key="draft_days", default=7)
     incident.draft_due_at = timezone.now() + timedelta(days=draft_days)
+    incident.review_due_at = None  # Clear old timer
 
     incident.save(
         update_fields=[
@@ -274,8 +290,9 @@ def return_to_draft(
             "updated_at",
             "notes",
             "draft_due_at",
+            "review_due_at",
         ]
-    )  # Add 'notes'/'reason' if used
+    )
     return incident
 
 
@@ -318,6 +335,7 @@ def return_to_review(
     # --- SLA logic ---
     review_days = _get_sla_days(key="review_days", default=5)
     incident.review_due_at = timezone.now() + timedelta(days=review_days)
+    incident.validation_due_at = None  # Clear old timer
 
     incident.save(
         update_fields=[
@@ -326,6 +344,7 @@ def return_to_review(
             "updated_at",
             "notes",
             "review_due_at",
+            "validation_due_at",
         ]
     )
     return incident
