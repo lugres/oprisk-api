@@ -18,7 +18,7 @@ from .permissions import (
     IsRoleRiskOfficer,
     IsRoleManager,
 )
-from .workflows import InvalidTransitionError
+from .workflows import InvalidTransitionError, RequiredFieldsError
 from .filters import IncidentFilter
 
 
@@ -109,7 +109,7 @@ class IncidentsViewSet(viewsets.ModelViewSet):
             )
             serializer = self.get_serializer(updated_incident)
             return Response(serializer.data, status=status.HTTP_200_OK)
-        except InvalidTransitionError as e:
+        except (InvalidTransitionError, RequiredFieldsError) as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
@@ -128,7 +128,7 @@ class IncidentsViewSet(viewsets.ModelViewSet):
             )
             serializer = self.get_serializer(updated_incident)
             return Response(serializer.data, status=status.HTTP_200_OK)
-        except InvalidTransitionError as e:
+        except (InvalidTransitionError, RequiredFieldsError) as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )

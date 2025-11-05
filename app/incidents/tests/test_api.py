@@ -27,6 +27,7 @@ from references.models import (
     BusinessUnit,
     BaselEventType,
     BusinessProcess,
+    Product,
 )
 
 from incidents.serializers import (
@@ -313,6 +314,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             name="Credit Cards", business_unit=self.bu_retail
         )
         self.basel_fraud = BaselEventType.objects.create(name="External Fraud")
+        self.product_card = Product.objects.create(name="Regular Credit Card")
 
         # --- Create Users ---
         self.manager = create_user(
@@ -360,12 +362,16 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             user=self.employee2,
             status=self.status_pending_review,
             business_unit=self.bu_retail,
+            simplified_event_type=self.event_fraud,  # dyn fld vld
+            product=self.product_card,
+            business_process=self.process_cards,
             title="Emp2 Incident",
         )
         self.incident_mgr = create_incident(
             user=self.manager,
             status=self.status_draft,
             business_unit=self.bu_retail,
+            business_process=self.process_cards,
             title="Manager Incident",
         )
         self.incident_other_bu = create_incident(
@@ -405,6 +411,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             business_unit=self.bu_retail,
             title="Emp2 Fraud Incident for review",  # Will match routing rule
             simplified_event_type=self.event_fraud,
+            product=self.product_card,
         )
         # Incident for submit test that is MISSING data
         self.incident_emp1_draft_missing_data = create_incident(
@@ -484,7 +491,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         )
         IncidentRequiredField.objects.create(
             status=self.status_pending_validation,  # Target status for review
-            field_name="basel_event_type",
+            field_name="simplified_event_type",
         )
 
     # --- Test Layer 1: Data Segregation (get_queryset) ---
@@ -866,7 +873,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("error", res.data)
         # Check that the error message clearly identifies the missing field
-        self.assertIn("business_process_id", res.data["error"])
+        self.assertIn("business_process", res.data["error"])
         self.assertIn("required for PENDING_REVIEW", res.data["error"])
 
         # Also ensure the status did NOT change
@@ -876,7 +883,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         )
 
     def test_review_fails_if_required_field_is_missing(self):
-        """Test review action fails if 'gross_loss_amount' is NULL."""
+        """Test review action fails if 'product' is NULL."""
         self.client.force_authenticate(user=self.manager)
         url = reverse(
             "incidents:incident-review",
@@ -886,7 +893,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("error", res.data)
-        self.assertIn("gross_loss_amount", res.data["error"])
+        self.assertIn("product", res.data["error"])
         self.assertIn("required for PENDING_VALIDATION", res.data["error"])
 
     # --- Test Layer 3: Domain Logic (workflow.py) ---

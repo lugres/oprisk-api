@@ -10,6 +10,12 @@ class InvalidTransitionError(Exception):
     pass
 
 
+class RequiredFieldsError(Exception):
+    """Custom exception for missing fields required for a state."""
+
+    pass
+
+
 def validate_transition(
     *,
     from_status: str,
