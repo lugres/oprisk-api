@@ -4,12 +4,14 @@ Loads transition rules, calls Domain for validation, handles DB transactions.
 Updates SLA details, evaluates custom routing rules, triggers notifications.
 """
 
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import Incident, IncidentStatusRef, AllowedTransition
+from .models import Incident, IncidentStatusRef, AllowedTransition, SlaConfig
 from .workflows import validate_transition
 from .routing import evaluate_routing_for_incident
 from notifications.models import Notification
@@ -76,6 +78,15 @@ def _find_risk_officer(business_unit):
     return User.objects.filter(role__name="Risk Officer").first()
 
 
+# --- SLA helper ---
+def _get_sla_days(key: str, default: int) -> int:
+    """Fetches an SLA configuration value from the DB, with a fallback."""
+    try:
+        return SlaConfig.objects.get(key=key).value_int
+    except SlaConfig.DoesNotExist:
+        return default
+
+
 # --- Service Functions ---
 
 
@@ -85,14 +96,25 @@ def create_incident(*, user: User, **kwargs) -> Incident:
     draft_status = IncidentStatusRef.objects.get(code="DRAFT")
     # The 'status' key is removed from kwargs if it exists to enforce default
     kwargs.pop("status", None)
+
+    # --- Set initial SLA ---
+    draft_days = _get_sla_days(key="draft_days", default=7)
+    draft_due_at = timezone.now() + timedelta(days=draft_days)
+    kwargs.pop("draft_due_at", None)
+    kwargs["review_due_at"] = None
+    kwargs["validation_due_at"] = None
+
     return Incident.objects.create(
-        created_by=user, status=draft_status, **kwargs
+        created_by=user,
+        status=draft_status,
+        draft_due_at=draft_due_at,
+        **kwargs,
     )
 
 
 @transaction.atomic
 def submit_incident(*, incident: Incident, user: User) -> Incident:
-    """Submits an incident for review."""
+    """Submits an incident for review and applies routing/SLA."""
     transition_rules = _get_transition_rules()
     validate_transition(
         from_status=incident.status.code,
@@ -103,7 +125,7 @@ def submit_incident(*, incident: Incident, user: User) -> Incident:
     pending_status = IncidentStatusRef.objects.get(code="PENDING_REVIEW")
     incident.status = pending_status
 
-    # --- Reverted Logic ---
+    # --- Reverted routing logic ---
     # Primary workflow stays unchanged (Employee -> Manager -> Risk),
     # instead a notification is triggered when routing rule is matched.
     # Assignment is now simple: just assign to the manager.
@@ -111,19 +133,33 @@ def submit_incident(*, incident: Incident, user: User) -> Incident:
         incident.assigned_to = user.manager
     else:
         incident.assigned_to = None  # Or assign to a default review pool
-    # --- End Reverted Logic ---
+    # --- End reverted routing logic ---
+
+    # --- SLA logic ---
+    review_days = _get_sla_days(key="review_days", default=5)
+    incident.review_due_at = timezone.now() + timedelta(days=review_days)
+    incident.draft_due_at = None  # Clear old timer
 
     # Placeholder for future logic
     # calculate_sla(incident)
     # check_routing_rules(incident)
 
-    incident.save(update_fields=["status", "assigned_to", "updated_at"])
+    incident.save(
+        update_fields=[
+            "status",
+            "assigned_to",
+            "updated_at",
+            "review_due_at",
+            "draft_due_at",
+        ]
+    )
     return incident
 
 
 @transaction.atomic
 def review_incident(*, incident: Incident, user: User) -> Incident:
-    """Reviews a PENDING_REVIEW incident, moving it to PENDING_VALIDATION."""
+    """Reviews a PENDING_REVIEW incident, moving it to PENDING_VALIDATION.
+    Assigns to Risk Officer, triggers notifications, and sets SLA."""
     transition_rules = _get_transition_rules()
     validate_transition(
         from_status=incident.status.code,
@@ -133,16 +169,32 @@ def review_incident(*, incident: Incident, user: User) -> Incident:
     )
 
     new_status = IncidentStatusRef.objects.get(code="PENDING_VALIDATION")
+
+    # --- Primary workflow (ownership) ---
     new_assigned_user = _find_risk_officer(incident.business_unit)
     incident.status = new_status
     incident.reviewed_by = user  # Log who reviewed it
     incident.assigned_to = new_assigned_user  # Assign to the Risk Officer
 
+    # --- SLA logic ---
+    validation_days = _get_sla_days(key="validation_days", default=10)
+    incident.validation_due_at = timezone.now() + timedelta(
+        days=validation_days
+    )
+    incident.review_due_at = None  # Clear old timer
+
     incident.save(
-        update_fields=["status", "assigned_to", "reviewed_by", "updated_at"]
+        update_fields=[
+            "status",
+            "assigned_to",
+            "reviewed_by",
+            "updated_at",
+            "validation_due_at",
+            "review_due_at",
+        ]
     )
 
-    # --- Parallel Workflow (Awareness) ---
+    # --- Parallel workflow (awareness) ---
     routing_result = evaluate_routing_for_incident(incident)
     if routing_result:
         # A rule matched. Create a notification.
@@ -184,6 +236,9 @@ def validate_incident(*, incident: Incident, user: User) -> Incident:
     incident.validated_at = timezone.now()
     incident.assigned_to = None
 
+    # --- SLA logic ---
+    incident.validation_due_at = None  # Clear old timer
+
     incident.save(
         update_fields=[
             "status",
@@ -191,6 +246,7 @@ def validate_incident(*, incident: Incident, user: User) -> Incident:
             "validated_at",
             "assigned_to",
             "updated_at",
+            "validation_due_at",
         ]
     )
     return incident
@@ -200,7 +256,8 @@ def validate_incident(*, incident: Incident, user: User) -> Incident:
 def return_to_draft(
     *, incident: Incident, user: User, reason: str
 ) -> Incident:
-    """Returns a PENDING_REVIEW incident to DRAFT, reason is required."""
+    """Returns a PENDING_REVIEW incident to DRAFT, reason is required,
+    resets SLA."""
     transition_rules = _get_transition_rules()
     validate_transition(
         from_status=incident.status.code,
@@ -221,9 +278,21 @@ def return_to_draft(
     )
     incident.notes = note_prefix + (incident.notes or "")
 
+    # --- SLA logic ---
+    draft_days = _get_sla_days(key="draft_days", default=7)
+    incident.draft_due_at = timezone.now() + timedelta(days=draft_days)
+    incident.review_due_at = None  # Clear old timer
+
     incident.save(
-        update_fields=["status", "assigned_to", "updated_at", "notes"]
-    )  # Add 'notes'/'reason' if used
+        update_fields=[
+            "status",
+            "assigned_to",
+            "updated_at",
+            "notes",
+            "draft_due_at",
+            "review_due_at",
+        ]
+    )
     return incident
 
 
@@ -231,7 +300,8 @@ def return_to_draft(
 def return_to_review(
     *, incident: Incident, user: User, reason: str
 ) -> Incident:
-    """Returns a PENDING_VALIDATION incident to PENDING_REVIEW, with reason."""
+    """Returns a PENDING_VALIDATION incident to PENDING_REVIEW, with reason,
+    resets SLA."""
     transition_rules = _get_transition_rules()
     validate_transition(
         from_status=incident.status.code,
@@ -262,8 +332,20 @@ def return_to_review(
     )
     incident.notes = note_prefix + (incident.notes or "")
 
+    # --- SLA logic ---
+    review_days = _get_sla_days(key="review_days", default=5)
+    incident.review_due_at = timezone.now() + timedelta(days=review_days)
+    incident.validation_due_at = None  # Clear old timer
+
     incident.save(
-        update_fields=["status", "assigned_to", "updated_at", "notes"]
+        update_fields=[
+            "status",
+            "assigned_to",
+            "updated_at",
+            "notes",
+            "review_due_at",
+            "validation_due_at",
+        ]
     )
     return incident
 

@@ -3,10 +3,12 @@ Tests for incidents API.
 """
 
 from decimal import Decimal
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -17,6 +19,7 @@ from incidents.models import (
     AllowedTransition,
     IncidentRoutingRule,
     SimplifiedEventTypeRef,
+    SlaConfig,
 )
 from references.models import (
     Role,
@@ -88,6 +91,8 @@ class PrivateIncidentApiTests(TestCase):
         self.status_pending = IncidentStatusRef.objects.create(
             code="PENDING_REVIEW", name="Pending"
         )
+        # Adding draft SLA
+        SlaConfig.objects.create(key="draft_days", value_int=7)
 
     def test_retrieve_incidents(self):
         """Test retrieving a list of incidents."""
@@ -177,13 +182,20 @@ class PrivateIncidentApiTests(TestCase):
             "gross_loss_amount": Decimal("199.99"),
             "currency_code": "EUR",
         }
-        res = self.client.post(INCIDENTS_LIST_URL, payload)
+        test_time = timezone.now()
+        with self.settings(NOW_OVERRIDE=test_time):
+            res = self.client.post(INCIDENTS_LIST_URL, payload)
 
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         incident = Incident.objects.get(id=res.data["id"])
         self.assertEqual(incident.title, payload["title"])
         self.assertEqual(incident.status.code, self.status_draft.code)
         self.assertEqual(incident.created_by, self.user)
+        # Check SLA logic
+        expected_due_date = (test_time + timedelta(days=7)).date()
+        self.assertEqual(incident.draft_due_at.date(), expected_due_date)
+        self.assertIsNone(incident.review_due_at)
+        self.assertIsNone(incident.validation_due_at)
 
     def test_partial_update_incident(self):
         """Test partial update of an incident with PATCH."""
@@ -255,36 +267,6 @@ class PrivateIncidentApiTests(TestCase):
 
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(Incident.objects.filter(id=incident.id).exists())
-
-    # Transitions - submit - old tests for initial endpoint, COMMENTED OUT
-    # def test_submit_incident_action_success(self):
-    #     """Test the custom action to submit a DRAFT incident."""
-    #     incident = create_incident(user=self.user, status=self.status_draft)
-    #     url = reverse("incidents:incident-submit", args=[incident.id])
-
-    #     res = self.client.post(url)
-    #     self.assertEqual(res.status_code, status.HTTP_200_OK)
-
-    #     incident.refresh_from_db()
-    #     self.assertEqual(incident.status.code, "PENDING_REVIEW")
-
-    # def test_submit_incident_wrong_status_fails(self):
-    #     """Test that submitting an incident not in DRAFT status fails."""
-    #     incident = create_incident(user=self.user,status=self.status_pending)
-    #     url = reverse("incidents:incident-submit", args=[incident.id])
-
-    #     res = self.client.post(url)
-    #     self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
-
-    # def test_submit_incident_not_owner_fails(self):
-    #     """Test that a user cannot submit an incident they did not create."""
-    #     new_user = create_user(email="user2@example.com", password="tstps12")
-    #     incident = create_incident(user=new_user, status=self.status_draft)
-    #     url = reverse("incidents:incident-submit", args=[incident.id])
-
-    #     res = self.client.post(url)
-    #     # This will fail with 404 because get_queryset already filters by usr
-    #     self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
 
 class IncidentApiTransitionsPermissionsTests(TestCase):
@@ -460,6 +442,11 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             active=True,
         )
 
+        # --- Configure SLA ---
+        SlaConfig.objects.create(key="draft_days", value_int=7)
+        SlaConfig.objects.create(key="review_days", value_int=5)
+        SlaConfig.objects.create(key="validation_days", value_int=10)
+
     # --- Test Layer 1: Data Segregation (get_queryset) ---
 
     def test_employee_sees_only_own_incidents(self):
@@ -501,18 +488,31 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
     # --- Test Layer 2: Action Permissions (permission_classes) ---
 
     def test_employee_can_submit_own_incident(self):
-        """Test an employee can submit his own incident for review."""
+        """Test an employee can submit his own incident for review.
+        Submit assigns to manager and updates SLA fields."""
         self.client.force_authenticate(user=self.employee1)
         url = reverse(
             "incidents:incident-submit", args=[self.incident_emp1.id]
         )
-        res = self.client.post(url)
+
+        test_time = timezone.now()
+        with self.settings(NOW_OVERRIDE=test_time):
+            res = self.client.post(url)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.incident_emp1.refresh_from_db()
         self.assertEqual(self.incident_emp1.status.code, "PENDING_REVIEW")
         # Check fallback assignment - no routing
         self.assertEqual(self.incident_emp1.assigned_to, self.manager)
+        # --- Check SLA logic ---
+        # 5 days expected from SlaConfig
+        expected_due_date = (test_time + timedelta(days=5)).date()
+        # Old timer cleared
+        self.assertIsNone(self.incident_emp1.draft_due_at)
+        # New timer set
+        self.assertEqual(
+            self.incident_emp1.review_due_at.date(), expected_due_date
+        )
 
     def test_review_incident_creates_notification_on_route_match(self):
         """Test that reviewing an incident creates a
@@ -586,12 +586,14 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
     # Tests for 'validate' action
     def test_risk_officer_can_validate_incident(self):
-        """Test Risk Officer successfully validates an incident."""
+        """Test Risk Officer successfully validates an incident
+        and clears SLA."""
         self.client.force_authenticate(user=self.risk_officer)
         url = reverse(
             "incidents:incident-validate",
             args=[self.incident_emp1_pending_validation.id],
         )
+
         res = self.client.post(url)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
@@ -606,9 +608,17 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             self.incident_emp1_pending_validation.validated_by,
             self.risk_officer,
         )
+        # Assignment should be cleared
+        self.assertIsNone(self.incident_emp1_pending_validation.assigned_to)
+        # --- Check SLA logic ---
+        # Timer cleared
         self.assertIsNone(
-            self.incident_emp1_pending_validation.assigned_to
-        )  # Assignment should be cleared
+            self.incident_emp1_pending_validation.validation_due_at
+        )
+        # History set
+        self.assertIsNotNone(
+            self.incident_emp1_pending_validation.validated_at
+        )
 
     def test_manager_cannot_validate_incident(self):
         """Test Manager is blocked by permission class from validating."""
@@ -625,7 +635,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
     # --- Tests for 'return' actions ---
     def test_manager_can_return_to_draft_with_reason(self):
         """Test manager can return an incident (PENDING_REVIEW to DRAFT).
-        Reason is required."""
+        Reason is required. draft_due_at is recomputed."""
         self.client.force_authenticate(user=self.manager)
         url = reverse(
             "incidents:incident-return-to-draft",
@@ -633,7 +643,10 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         )
         # Include a reason in the payload
         payload = {"reason": "Needs more details in description."}
-        res = self.client.post(url, payload)
+
+        test_time = timezone.now()
+        with self.settings(NOW_OVERRIDE=test_time):
+            res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.incident_emp2_pending_review.refresh_from_db()
@@ -641,9 +654,8 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertEqual(
             self.incident_emp2_pending_review.status, self.status_draft
         )
-        self.assertIsNone(
-            self.incident_emp2_pending_review.assigned_to
-        )  # Assignment should be cleared
+        # Assignment should be cleared
+        self.assertIsNone(self.incident_emp2_pending_review.assigned_to)
         # Check that the reason was added to notes
         self.assertIn(
             payload["reason"], self.incident_emp2_pending_review.notes
@@ -651,6 +663,15 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertIn(
             self.manager.email, self.incident_emp2_pending_review.notes
         )
+        # Check SLA logic
+        # Assuming draft_days is 7
+        expected_due_date = (test_time + timedelta(days=7)).date()
+        self.assertEqual(
+            self.incident_emp2_pending_review.draft_due_at.date(),
+            expected_due_date,
+        )
+        # Old timer cleared
+        self.assertIsNone(self.incident_emp2_pending_review.review_due_at)
 
     def test_return_to_draft_fails_without_reason(self):
         """Test returning to draft fails if reason payload is missing."""
@@ -703,14 +724,17 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_risk_officer_can_return_to_review_with_reason(self):
-        """Test Risk Officer successfully returns incident with reason."""
+        """Test Risk Officer successfully returns incident with reason.
+        review_due_at is recomputed."""
         self.client.force_authenticate(user=self.risk_officer)
         url = reverse(
             "incidents:incident-return-to-review",
             args=[self.incident_emp1_pending_validation.id],
         )
         payload = {"reason": "Incorrect category assigned."}
-        res = self.client.post(url, payload)
+        test_time = timezone.now()
+        with self.settings(NOW_OVERRIDE=test_time):
+            res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.incident_emp1_pending_validation.refresh_from_db()
@@ -729,6 +753,16 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertIn(
             self.risk_officer.email,
             self.incident_emp1_pending_validation.notes,
+        )
+        # Check SLA logic
+        expected_due_date = (test_time + timedelta(days=5)).date()
+        self.assertEqual(
+            self.incident_emp1_pending_validation.review_due_at.date(),
+            expected_due_date,
+        )
+        # Old timer cleared
+        self.assertIsNone(
+            self.incident_emp1_pending_validation.validation_due_at
         )
 
     def test_return_to_review_fails_without_reason(self):
@@ -808,12 +842,15 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
     def test_review_incident_side_effects_assignment(self):
         """Test that reviewing an incident correctly assigns it
-        to a Risk Officer."""
+        to a Risk Officer and updates SLA fields."""
         self.client.force_authenticate(user=self.manager)
         url = reverse(
             "incidents:incident-review", args=[self.incident_emp2.id]
         )
-        self.client.post(url)
+
+        test_time = timezone.now()
+        with self.settings(NOW_OVERRIDE=test_time):
+            self.client.post(url)
 
         self.incident_emp2.refresh_from_db()
 
@@ -823,6 +860,15 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         )
         self.assertEqual(self.incident_emp2.reviewed_by, self.manager)
         self.assertEqual(self.incident_emp2.assigned_to, self.risk_officer)
+        # --- Check SLA logic ---
+        # 10 days from SlaConfig
+        expected_due_date = (test_time + timedelta(days=10)).date()
+        # Old timer cleared
+        self.assertIsNone(self.incident_emp2.review_due_at)
+        self.assertEqual(
+            self.incident_emp2.validation_due_at.date(),
+            expected_due_date,
+        )
 
     def test_manager_cannot_submit_own_incident(self):
         """Test manager is blocked by business rules."""
