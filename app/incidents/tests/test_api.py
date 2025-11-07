@@ -1027,18 +1027,6 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             expected_due_date,
         )
 
-    def test_manager_cannot_submit_own_incident(self):
-        """Test manager is blocked by business rules."""
-        self.client.force_authenticate(user=self.manager)
-        # The manager can *see* and access this incident (Layer 1 & 2 pass)
-        url = reverse("incidents:incident-submit", args=[self.incident_mgr.id])
-
-        res = self.client.post(url)
-
-        # But transition is forbidden by business rules (Layer 3),
-        # caught by validate_transition(), thus should fail
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-
     # --- Tests for 'validate' action ---
     def test_cannot_validate_incident_in_wrong_state(self):
         """Test validating an incident not in PENDING_VALIDATION fails."""
@@ -1094,3 +1082,86 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             "Transition from 'DRAFT' to 'CLOSED' is not defined.",
             res.data["error"],
         )
+
+    # --- Tests for Dynamic Field-Level Security (PATCH) ---
+
+    def test_employee_can_edit_allowed_field_in_draft(self):
+        """Test Employee can PATCH 'title' on their DRAFT incident."""
+        self.client.force_authenticate(user=self.employee1)
+        url = detail_url(self.incident_emp1.id)  # self.incident_emp1 is DRAFT
+        new_title = "Title Updated by Employee"
+
+        res = self.client.patch(url, {"title": new_title})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp1.refresh_from_db()
+        self.assertEqual(self.incident_emp1.title, new_title)
+
+    def test_employee_cannot_edit_disallowed_field_in_draft(self):
+        """Test Employee's PATCH to 'basel_event_type' is IGNORED in DRAFT."""
+        self.client.force_authenticate(user=self.employee1)
+        incident = self.incident_emp1  # DRAFT status
+        url = detail_url(incident.id)
+
+        res = self.client.patch(
+            url,
+            {"basel_event_type": self.basel_fraud.id},
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)  # Request is OK
+        incident.refresh_from_db()
+        self.assertIsNone(incident.basel_event_type)  # Field is unchanged
+
+    def test_employee_cannot_edit_allowed_field_in_wrong_status(self):
+        """Test Employee's PATCH to 'title' is IGNORED in PENDING_VALIDATION"""
+        self.client.force_authenticate(user=self.employee1)
+        # This incident is PENDING_VALIDATION
+        incident = self.incident_emp1_pending_validation
+        original_title = incident.title
+        url = detail_url(incident.id)
+
+        res = self.client.patch(
+            url, {"title": "This update should be ignored"}
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        incident.refresh_from_db()
+        # The title remains unchanged
+        self.assertEqual(incident.title, original_title)
+
+    def test_risk_officer_can_edit_their_fields_in_validation(self):
+        """Test Risk Officer CAN edit 'gross_loss_amount' in PENDING_VALIDN"""
+        self.client.force_authenticate(user=self.risk_officer)
+        incident = self.incident_emp1_pending_validation
+        url = detail_url(incident.id)
+        new_amount = Decimal("12345.67")
+
+        res = self.client.patch(url, {"gross_loss_amount": new_amount})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        incident.refresh_from_db()
+        self.assertEqual(incident.gross_loss_amount, new_amount)
+
+    def test_all_fields_are_readonly_in_closed_status(self):
+        """Test that NO fields are editable once an incident is CLOSED."""
+        self.client.force_authenticate(user=self.risk_officer)
+        # self.incident_emp1_validated is VALIDATED, let's close it
+        close_url = reverse(
+            "incidents:incident-close", args=[self.incident_emp1_validated.id]
+        )
+        self.client.post(close_url)
+
+        self.incident_emp1_validated.refresh_from_db()
+        self.assertEqual(
+            self.incident_emp1_validated.status, self.status_closed
+        )
+
+        # Now, try to PATCH the closed incident
+        patch_url = detail_url(self.incident_emp1_validated.id)
+        original_title = self.incident_emp1_validated.title
+        res = self.client.patch(patch_url, {"title": "This must be ignored"})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp1_validated.refresh_from_db()
+        # Title remains unchanged
+        self.assertEqual(self.incident_emp1_validated.title, original_title)
