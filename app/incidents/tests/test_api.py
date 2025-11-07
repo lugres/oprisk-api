@@ -355,7 +355,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             user=self.employee1,
             status=self.status_draft,
             business_unit=self.bu_retail,
-            business_process=self.process_cards,  # Updated for dyn flds
+            simplified_event_type=self.event_fraud,  # dyn fld vld
             title="Emp1 Incident",
         )
         self.incident_emp2 = create_incident(
@@ -371,7 +371,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             user=self.manager,
             status=self.status_draft,
             business_unit=self.bu_retail,
-            business_process=self.process_cards,
+            simplified_event_type=self.event_fraud,  # dyn fld vld
             title="Manager Incident",
         )
         self.incident_other_bu = create_incident(
@@ -380,6 +380,17 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             business_unit=self.bu_corp,
             title="Corp Incident",
         )
+        # Specifically for test_cannot_validate_incident_in_wrong_state
+        self.incident_emp1_draft_for_validation = create_incident(
+            user=self.employee1,
+            status=self.status_draft,  # Set DRAFT
+            business_unit=self.bu_retail,
+            title="Emp1 in Draft to test validation",
+            basel_event_type=self.basel_fraud,  # dyn fld vld
+            net_loss_amount=Decimal("199.95"),
+            currency_code="EUR",
+        )
+
         # Create an incident ready for validation
         self.incident_emp1_pending_validation = create_incident(
             user=self.employee1,
@@ -387,6 +398,9 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             business_unit=self.bu_retail,
             title="Emp1 Pending Validation",
             assigned_to=self.risk_officer,  # Assume it was assigned on review
+            basel_event_type=self.basel_fraud,  # dyn fld vld
+            net_loss_amount=Decimal("199.95"),
+            currency_code="EUR",
         )
         # Create incident ready for return actions
         self.incident_emp2_pending_review = create_incident(
@@ -411,6 +425,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             business_unit=self.bu_retail,
             title="Emp2 Fraud Incident for review",  # Will match routing rule
             simplified_event_type=self.event_fraud,
+            business_process=self.process_cards,
             product=self.product_card,
         )
         # Incident for submit test that is MISSING data
@@ -418,8 +433,8 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             user=self.employee1,
             status=self.status_draft,
             business_unit=self.bu_retail,
-            title="Emp1 Draft Missing Process",
-            # business_process is NULL
+            title="Emp1 Draft Missing Simplified event type",
+            simplified_event_type=None,  # is NULL
         )
         # Incident for review test that is MISSING product
         self.incident_emp2_review_missing_amount = create_incident(
@@ -427,7 +442,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             status=self.status_pending_review,
             business_unit=self.bu_retail,
             title="Emp2 Review Missing Product",
-            basel_event_type=self.basel_fraud,
+            simplified_event_type=self.event_fraud,
             product=None,  # Explicitly NULL
         )
 
@@ -481,17 +496,41 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         SlaConfig.objects.create(key="validation_days", value_int=10)
 
         # --- Configure Required Fields ---
+
+        # 1. To move to PENDING_REVIEW (checked by submit_incident)
+        # 'title', 'description', 'gross_loss_amount' are handled by the model.
         IncidentRequiredField.objects.create(
             status=self.status_pending_review,  # Target status for submit
-            field_name="business_process",  # Field required to submit
+            field_name="simplified_event_type",  # Field required to submit
         )
+        # 2. To move to PENDING_VALIDATION (checked by review_incident)
+        # Manager ensures these are set before escalating to Risk.
         IncidentRequiredField.objects.create(
-            status=self.status_pending_validation,  # Target status for review
+            status=self.status_pending_validation,
             field_name="product",
         )
         IncidentRequiredField.objects.create(
             status=self.status_pending_validation,  # Target status for review
+            field_name="business_process",  # Field required to review
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_pending_validation,
+            field_name="gross_loss_amount",
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_pending_validation,
             field_name="simplified_event_type",
+        )
+        # 3. To move to VALIDATED (checked by validate_incident)
+        # Risk Officer must fill these before validating.
+        IncidentRequiredField.objects.create(
+            status=self.status_validated, field_name="basel_event_type"
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_validated, field_name="net_loss_amount"
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_validated, field_name="currency_code"
         )
 
     # --- Test Layer 1: Data Segregation (get_queryset) ---
@@ -502,8 +541,8 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 4)
-        self.assertEqual(res.data[3]["title"], "Emp1 Incident")
+        self.assertEqual(len(res.data), 5)
+        self.assertEqual(res.data[4]["title"], "Emp1 Incident")
 
     def test_manager_sees_own_and_team_incidents(self):
         """Test a manager can see only his team's incidents and his own."""
@@ -511,7 +550,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 9)  # emp1, emp2, and their own
+        self.assertEqual(len(res.data), 10)  # emp1, emp2, and their own
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
         self.assertIn("Emp2 Incident", titles)
@@ -524,7 +563,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            len(res.data), 9
+            len(res.data), 10
         )  # emp1, emp2, manager (all in bu_retail)
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
@@ -861,7 +900,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
     # --- Tests for Dynamic Field Validation (Layer 2.5) ---
 
     def test_submit_fails_if_required_field_is_missing(self):
-        """Test submit action fails if 'business_process_id' is missing."""
+        """Test submit action fails if 'simplified_event_type' is missing."""
         self.client.force_authenticate(user=self.employee1)
         url = reverse(
             "incidents:incident-submit",
@@ -873,7 +912,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("error", res.data)
         # Check that the error message clearly identifies the missing field
-        self.assertIn("business_process", res.data["error"])
+        self.assertIn("simplified_event_type", res.data["error"])
         self.assertIn("required for PENDING_REVIEW", res.data["error"])
 
         # Also ensure the status did NOT change
@@ -895,6 +934,39 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.assertIn("error", res.data)
         self.assertIn("product", res.data["error"])
         self.assertIn("required for PENDING_VALIDATION", res.data["error"])
+
+    def test_validate_fails_if_required_field_is_missing(self):
+        """Test validate action fails if 'basel_event_type' is missing."""
+        self.client.force_authenticate(user=self.risk_officer)
+        # This incident is ready for validation but I'll remove required field
+        incident = self.incident_emp1_pending_validation
+        incident.basel_event_type = None
+        incident.net_loss_amount = Decimal("100.00")  # Has this one
+        incident.currency_code = "USD"  # And this one
+        incident.save()
+
+        url = reverse("incidents:incident-validate", args=[incident.id])
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("basel_event_type", res.data["error"])
+
+    def test_validate_fails_if_multiple_fields_are_missing(self):
+        """Test validate action lists all missing fields."""
+        self.client.force_authenticate(user=self.risk_officer)
+        incident = self.incident_emp1_pending_validation
+        incident.basel_event_type = None  # Missing
+        incident.net_loss_amount = None  # Missing
+        incident.currency_code = "USD"  # Has this one
+        incident.save()
+
+        url = reverse("incidents:incident-validate", args=[incident.id])
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        error_msg = res.data["error"]
+        self.assertIn("basel_event_type", error_msg)
+        self.assertIn("net_loss_amount", error_msg)
 
     # --- Test Layer 3: Domain Logic (workflow.py) ---
 
@@ -974,7 +1046,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.client.force_authenticate(user=self.risk_officer)
         url = reverse(
             "incidents:incident-validate",
-            args=[self.incident_emp1.id],  # incident_emp1 is DRAFT
+            args=[self.incident_emp1_draft_for_validation.id],  # in DRAFT
         )
         res = self.client.post(url)
 

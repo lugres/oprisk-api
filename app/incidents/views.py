@@ -147,7 +147,7 @@ class IncidentsViewSet(viewsets.ModelViewSet):
             )
             serializer = self.get_serializer(updated_incident)
             return Response(serializer.data)
-        except InvalidTransitionError as e:
+        except (InvalidTransitionError, RequiredFieldsError) as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )

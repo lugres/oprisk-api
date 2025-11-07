@@ -110,12 +110,15 @@ def _validate_required_fields(incident: Incident, target_status_code: str):
         status=target_status
     )
     missing_fields = []
+    # checked_values = {}  # for debug
 
     for field in required_fields:
         field_name = field.field_name
-        # Check if the attribute on the incident is None
-        # This works for Null ForeignKeys, empty DecimalFields, etc.
-        if getattr(incident, field_name, None) is None:
+        # Check if the attribute on the incident is None or ""
+        # This works for Null ForeignKeys, empty DecimalFields or CharFields
+        value = getattr(incident, field_name, None)
+        # checked_values[field_name] = value  # for debug
+        if value is None or value == "":
             missing_fields.append(field_name)
 
     if missing_fields:
@@ -123,6 +126,8 @@ def _validate_required_fields(incident: Incident, target_status_code: str):
         field_list = ", ".join(missing_fields)
         raise RequiredFieldsError(
             f"Fields {field_list} are required for {target_status_code}."
+            # f"Required fields - {required_fields}"  # for debug
+            # f"Checked values - {checked_values}"  # for debug
         )
 
 
@@ -273,6 +278,11 @@ def review_incident(*, incident: Incident, user: User) -> Incident:
 @transaction.atomic
 def validate_incident(*, incident: Incident, user: User) -> Incident:
     """Validates a PENDING_VALIDATION incident, moving it to VALIDATED."""
+
+    # --- NEW: Field Validation ---
+    _validate_required_fields(incident, "VALIDATED")
+
+    # --- Workflow Validation ---
     transition_rules = _get_transition_rules()
     validate_transition(
         from_status=incident.status.code,
