@@ -21,6 +21,7 @@ from incidents.models import (
     SimplifiedEventTypeRef,
     SlaConfig,
     IncidentRequiredField,
+    IncidentEditableField,
 )
 from references.models import (
     Role,
@@ -84,7 +85,15 @@ class PrivateIncidentApiTests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        self.user = create_user(email="test@example.com", password="testp123")
+
+        # --- NEW: Add Role and Status for context ---
+        self.role_emp, _ = Role.objects.get_or_create(name="Employee")
+        # ensure user has a role - needed for dynamic field editing logic
+        self.user = create_user(
+            email="test@example.com",
+            password="testp123",
+            role=self.role_emp,
+        )
 
         self.client.force_authenticate(user=self.user)
 
@@ -96,6 +105,20 @@ class PrivateIncidentApiTests(TestCase):
         )
         # Adding draft SLA
         SlaConfig.objects.create(key="draft_days", value_int=7)
+
+        # --- NEW: Configure editable fields for this test class ---
+        # The user is an 'Employee' now, so we allow editing 'title'
+        # and 'description' fields in DRAFT status, matching main config.
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="title",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="description",
+        )
 
     def test_retrieve_incidents(self):
         """Test retrieving a list of incidents."""
@@ -532,6 +555,100 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         IncidentRequiredField.objects.create(
             status=self.status_validated, field_name="currency_code"
         )
+
+        # --- Configure Editable Fields ---
+
+        # 1: Employee @ DRAFT
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="title",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="description",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="simplified_event_type",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="near_miss",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="gross_loss_amount",  # "draft loss"
+        )
+
+        # 2: Manager @ PENDING_REVIEW
+        IncidentEditableField.objects.create(
+            status=self.status_pending_review,
+            role=self.role_mgr,
+            field_name="business_process",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_review,
+            role=self.role_mgr,
+            field_name="product",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_review,
+            role=self.role_mgr,
+            field_name="gross_loss_amount",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_review,
+            role=self.role_mgr,
+            field_name="simplified_event_type",
+        )
+
+        # 3: Risk Officer @ PENDING_VALIDATION
+        # "Can change all other fields"
+        # We'll list the key ones, especially those the manager couldn't edit
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="basel_event_type",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="recovery_amount",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="net_loss_amount",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="currency_code",
+        )
+        # Also grant them permission to edit fields from previous steps
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="title",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="description",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="gross_loss_amount",
+        )
+
+        # 5: CLOSED status
+        # NO rules for CLOSED status, meaning all fields become read-only.
 
     # --- Test Layer 1: Data Segregation (get_queryset) ---
 

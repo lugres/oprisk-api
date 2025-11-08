@@ -240,6 +240,27 @@ class IncidentRequiredField(models.Model):
         unique_together = (("status", "field_name"),)
 
 
+class IncidentEditableField(models.Model):
+    """
+    Configuration model to define which roles can edit which fields
+    at a specific incident status.
+    """
+
+    status = models.ForeignKey(IncidentStatusRef, on_delete=models.CASCADE)
+    role = models.ForeignKey("references.Role", on_delete=models.CASCADE)
+    field_name = models.CharField(max_length=100)
+
+    class Meta:
+        unique_together = ("status", "role", "field_name")
+        verbose_name = "Editable Incident Field"
+
+    def __str__(self):
+        return (
+            f"[{self.role.name}] can edit [{self.field_name}]"
+            f" at status [{self.status.code}]"
+        )
+
+
 class SlaConfig(models.Model):
     """Deadlines for each workflow stage; re-calculated during transitions;
     trigger reminders/notifications."""
