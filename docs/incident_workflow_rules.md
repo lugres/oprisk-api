@@ -2,6 +2,8 @@
 
 This document defines the core business logic that governs the incident lifecycle, from data collection to state transitions.
 
+---
+
 ## 1. Incident State Machine
 
 The incident workflow follows a strict, role-based state machine. An incident can only move between states via an authorized transition.
@@ -11,6 +13,8 @@ The incident workflow follows a strict, role-based state machine. An incident ca
 * **PENDING_VALIDATION:** Reviewed by a Manager and awaiting Risk Officer validation.
 * **VALIDATED:** Validated by a Risk Officer. Data is considered final.
 * **CLOSED:** The incident record is complete and locked.
+
+---
 
 ## 2. State Transition Rules
 

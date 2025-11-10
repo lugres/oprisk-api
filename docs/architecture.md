@@ -2,6 +2,8 @@
 
 This document outlines the high-level architecture of the ORM platform, focusing on the tech stack, separation of concerns, and permission model.
 
+---
+
 ## 1. High-Level System Design
 
 The platform is designed as a **monolithic Django backend** providing a RESTful API. This approach was chosen to simplify development, testing, and iteration for the MVP. A planned **React frontend** will consume this API.
@@ -12,6 +14,8 @@ The platform is designed as a **monolithic Django backend** providing a RESTful 
 * **Deployment:** The entire stack is containerized with Docker.
 
 This layered, modular monolith provides a clear path for future scaling, allowing well-defined components to be potentially extracted into microservices if needed.
+
+---
 
 ## 2. The 3-Layer Architectural Pattern
 
