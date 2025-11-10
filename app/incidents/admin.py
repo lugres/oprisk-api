@@ -16,3 +16,10 @@ admin.site.register(models.IncidentRoutingRule)
 admin.site.register(models.IncidentRequiredField)
 admin.site.register(models.SlaConfig)
 admin.site.register(models.AllowedTransition)
+
+
+@admin.register(models.IncidentEditableField)
+class IncidentEditableFieldAdmin(admin.ModelAdmin):
+    list_display = ("status", "role", "field_name")
+    list_filter = ("status", "role")
+    search_fields = ("field_name",)

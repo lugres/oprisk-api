@@ -18,7 +18,7 @@ from .permissions import (
     IsRoleRiskOfficer,
     IsRoleManager,
 )
-from .workflows import InvalidTransitionError
+from .workflows import InvalidTransitionError, RequiredFieldsError
 from .filters import IncidentFilter
 
 
@@ -72,12 +72,13 @@ class IncidentsViewSet(viewsets.ModelViewSet):
 
         return self.serializer_class
 
-    # def perform_create(self, serializer):
-    #     """Create a new incident using service layer."""
-    #     # Pass validated data to the service function
-    #     services.create_incident(
-    #         user=self.request.user, **serializer.validated_data
-    #     )
+    def get_serializer_context(self):
+        """Pass user role and incident status into the serializer."""
+        context = super().get_serializer_context()
+        context["user_role"] = self.request.user.role
+
+        return context
+
     def create(self, request, *args, **kwargs):
         """Create a new incident by calling the service layer."""
         serializer = self.get_serializer(data=request.data)
@@ -109,7 +110,7 @@ class IncidentsViewSet(viewsets.ModelViewSet):
             )
             serializer = self.get_serializer(updated_incident)
             return Response(serializer.data, status=status.HTTP_200_OK)
-        except InvalidTransitionError as e:
+        except (InvalidTransitionError, RequiredFieldsError) as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
@@ -128,7 +129,7 @@ class IncidentsViewSet(viewsets.ModelViewSet):
             )
             serializer = self.get_serializer(updated_incident)
             return Response(serializer.data, status=status.HTTP_200_OK)
-        except InvalidTransitionError as e:
+        except (InvalidTransitionError, RequiredFieldsError) as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
@@ -147,7 +148,7 @@ class IncidentsViewSet(viewsets.ModelViewSet):
             )
             serializer = self.get_serializer(updated_incident)
             return Response(serializer.data)
-        except InvalidTransitionError as e:
+        except (InvalidTransitionError, RequiredFieldsError) as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )

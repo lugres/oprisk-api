@@ -11,8 +11,14 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import Incident, IncidentStatusRef, AllowedTransition, SlaConfig
-from .workflows import validate_transition
+from .models import (
+    Incident,
+    IncidentStatusRef,
+    AllowedTransition,
+    SlaConfig,
+    IncidentRequiredField,
+)
+from .workflows import validate_transition, RequiredFieldsError
 from .routing import evaluate_routing_for_incident
 from notifications.models import Notification
 
@@ -87,6 +93,44 @@ def _get_sla_days(key: str, default: int) -> int:
         return default
 
 
+# --- Validation Helper Function ---
+def _validate_required_fields(incident: Incident, target_status_code: str):
+    """
+    Checks if an incident has all required fields for the target status.
+    Raises RequiredFieldsError if any fields are missing.
+    """
+    try:
+        # Get the status we are transitioning TO
+        target_status = IncidentStatusRef.objects.get(code=target_status_code)
+    except IncidentStatusRef.DoesNotExist:
+        return  # This shouldn't happen if workflows are set up, safe to exit
+
+    # Find all fields marked as required for this target status
+    required_fields = IncidentRequiredField.objects.filter(
+        status=target_status
+    )
+    missing_fields = []
+    # checked_values = {}  # for debug
+
+    for field in required_fields:
+        field_name = field.field_name
+        # Check if the attribute on the incident is None or ""
+        # This works for Null ForeignKeys, empty DecimalFields or CharFields
+        value = getattr(incident, field_name, None)
+        # checked_values[field_name] = value  # for debug
+        if value is None or value == "":
+            missing_fields.append(field_name)
+
+    if missing_fields:
+        # If any fields are missing, raise the specific error
+        field_list = ", ".join(missing_fields)
+        raise RequiredFieldsError(
+            f"Fields {field_list} are required for {target_status_code}."
+            # f"Required fields - {required_fields}"  # for debug
+            # f"Checked values - {checked_values}"  # for debug
+        )
+
+
 # --- Service Functions ---
 
 
@@ -115,6 +159,12 @@ def create_incident(*, user: User, **kwargs) -> Incident:
 @transaction.atomic
 def submit_incident(*, incident: Incident, user: User) -> Incident:
     """Submits an incident for review and applies routing/SLA."""
+
+    # --- Field Validation ---
+    # Check fields required for the *target* status 'PENDING_REVIEW'
+    _validate_required_fields(incident, "PENDING_REVIEW")
+
+    # --- Workflow Validation ---
     transition_rules = _get_transition_rules()
     validate_transition(
         from_status=incident.status.code,
@@ -160,6 +210,12 @@ def submit_incident(*, incident: Incident, user: User) -> Incident:
 def review_incident(*, incident: Incident, user: User) -> Incident:
     """Reviews a PENDING_REVIEW incident, moving it to PENDING_VALIDATION.
     Assigns to Risk Officer, triggers notifications, and sets SLA."""
+
+    # --- Field Validation ---
+    # Check fields required for the *target* status 'PENDING_VALIDATION'
+    _validate_required_fields(incident, "PENDING_VALIDATION")
+
+    # --- Workflow Validation ---
     transition_rules = _get_transition_rules()
     validate_transition(
         from_status=incident.status.code,
@@ -222,6 +278,11 @@ def review_incident(*, incident: Incident, user: User) -> Incident:
 @transaction.atomic
 def validate_incident(*, incident: Incident, user: User) -> Incident:
     """Validates a PENDING_VALIDATION incident, moving it to VALIDATED."""
+
+    # --- NEW: Field Validation ---
+    _validate_required_fields(incident, "VALIDATED")
+
+    # --- Workflow Validation ---
     transition_rules = _get_transition_rules()
     validate_transition(
         from_status=incident.status.code,

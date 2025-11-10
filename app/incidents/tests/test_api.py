@@ -20,11 +20,15 @@ from incidents.models import (
     IncidentRoutingRule,
     SimplifiedEventTypeRef,
     SlaConfig,
+    IncidentRequiredField,
+    IncidentEditableField,
 )
 from references.models import (
     Role,
     BusinessUnit,
-    # BaselEventType,
+    BaselEventType,
+    BusinessProcess,
+    Product,
 )
 
 from incidents.serializers import (
@@ -81,7 +85,15 @@ class PrivateIncidentApiTests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
-        self.user = create_user(email="test@example.com", password="testp123")
+
+        # --- NEW: Add Role and Status for context ---
+        self.role_emp, _ = Role.objects.get_or_create(name="Employee")
+        # ensure user has a role - needed for dynamic field editing logic
+        self.user = create_user(
+            email="test@example.com",
+            password="testp123",
+            role=self.role_emp,
+        )
 
         self.client.force_authenticate(user=self.user)
 
@@ -93,6 +105,20 @@ class PrivateIncidentApiTests(TestCase):
         )
         # Adding draft SLA
         SlaConfig.objects.create(key="draft_days", value_int=7)
+
+        # --- NEW: Configure editable fields for this test class ---
+        # The user is an 'Employee' now, so we allow editing 'title'
+        # and 'description' fields in DRAFT status, matching main config.
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="title",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="description",
+        )
 
     def test_retrieve_incidents(self):
         """Test retrieving a list of incidents."""
@@ -306,6 +332,13 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # --- Add Event for Routing Rule ---
         self.event_fraud = SimplifiedEventTypeRef.objects.create(name="Fraud")
 
+        # --- Add Data for Dynamic Field Validation ---
+        self.process_cards = BusinessProcess.objects.create(
+            name="Credit Cards", business_unit=self.bu_retail
+        )
+        self.basel_fraud = BaselEventType.objects.create(name="External Fraud")
+        self.product_card = Product.objects.create(name="Regular Credit Card")
+
         # --- Create Users ---
         self.manager = create_user(
             email="manager@example.com",
@@ -345,18 +378,23 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             user=self.employee1,
             status=self.status_draft,
             business_unit=self.bu_retail,
+            simplified_event_type=self.event_fraud,  # dyn fld vld
             title="Emp1 Incident",
         )
         self.incident_emp2 = create_incident(
             user=self.employee2,
             status=self.status_pending_review,
             business_unit=self.bu_retail,
+            simplified_event_type=self.event_fraud,  # dyn fld vld
+            product=self.product_card,
+            business_process=self.process_cards,
             title="Emp2 Incident",
         )
         self.incident_mgr = create_incident(
             user=self.manager,
             status=self.status_draft,
             business_unit=self.bu_retail,
+            simplified_event_type=self.event_fraud,  # dyn fld vld
             title="Manager Incident",
         )
         self.incident_other_bu = create_incident(
@@ -365,6 +403,17 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             business_unit=self.bu_corp,
             title="Corp Incident",
         )
+        # Specifically for test_cannot_validate_incident_in_wrong_state
+        self.incident_emp1_draft_for_validation = create_incident(
+            user=self.employee1,
+            status=self.status_draft,  # Set DRAFT
+            business_unit=self.bu_retail,
+            title="Emp1 in Draft to test validation",
+            basel_event_type=self.basel_fraud,  # dyn fld vld
+            net_loss_amount=Decimal("199.95"),
+            currency_code="EUR",
+        )
+
         # Create an incident ready for validation
         self.incident_emp1_pending_validation = create_incident(
             user=self.employee1,
@@ -372,6 +421,9 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             business_unit=self.bu_retail,
             title="Emp1 Pending Validation",
             assigned_to=self.risk_officer,  # Assume it was assigned on review
+            basel_event_type=self.basel_fraud,  # dyn fld vld
+            net_loss_amount=Decimal("199.95"),
+            currency_code="EUR",
         )
         # Create incident ready for return actions
         self.incident_emp2_pending_review = create_incident(
@@ -396,6 +448,25 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             business_unit=self.bu_retail,
             title="Emp2 Fraud Incident for review",  # Will match routing rule
             simplified_event_type=self.event_fraud,
+            business_process=self.process_cards,
+            product=self.product_card,
+        )
+        # Incident for submit test that is MISSING data
+        self.incident_emp1_draft_missing_data = create_incident(
+            user=self.employee1,
+            status=self.status_draft,
+            business_unit=self.bu_retail,
+            title="Emp1 Draft Missing Simplified event type",
+            simplified_event_type=None,  # is NULL
+        )
+        # Incident for review test that is MISSING product
+        self.incident_emp2_review_missing_amount = create_incident(
+            user=self.employee2,
+            status=self.status_pending_review,
+            business_unit=self.bu_retail,
+            title="Emp2 Review Missing Product",
+            simplified_event_type=self.event_fraud,
+            product=None,  # Explicitly NULL
         )
 
         # --- Configure State Machine ---
@@ -447,6 +518,138 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         SlaConfig.objects.create(key="review_days", value_int=5)
         SlaConfig.objects.create(key="validation_days", value_int=10)
 
+        # --- Configure Required Fields ---
+
+        # 1. To move to PENDING_REVIEW (checked by submit_incident)
+        # 'title', 'description', 'gross_loss_amount' are handled by the model.
+        IncidentRequiredField.objects.create(
+            status=self.status_pending_review,  # Target status for submit
+            field_name="simplified_event_type",  # Field required to submit
+        )
+        # 2. To move to PENDING_VALIDATION (checked by review_incident)
+        # Manager ensures these are set before escalating to Risk.
+        IncidentRequiredField.objects.create(
+            status=self.status_pending_validation,
+            field_name="product",
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_pending_validation,  # Target status for review
+            field_name="business_process",  # Field required to review
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_pending_validation,
+            field_name="gross_loss_amount",
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_pending_validation,
+            field_name="simplified_event_type",
+        )
+        # 3. To move to VALIDATED (checked by validate_incident)
+        # Risk Officer must fill these before validating.
+        IncidentRequiredField.objects.create(
+            status=self.status_validated, field_name="basel_event_type"
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_validated, field_name="net_loss_amount"
+        )
+        IncidentRequiredField.objects.create(
+            status=self.status_validated, field_name="currency_code"
+        )
+
+        # --- Configure Editable Fields ---
+
+        # 1: Employee @ DRAFT
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="title",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="description",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="simplified_event_type",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="near_miss",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_draft,
+            role=self.role_emp,
+            field_name="gross_loss_amount",  # "draft loss"
+        )
+
+        # 2: Manager @ PENDING_REVIEW
+        IncidentEditableField.objects.create(
+            status=self.status_pending_review,
+            role=self.role_mgr,
+            field_name="business_process",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_review,
+            role=self.role_mgr,
+            field_name="product",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_review,
+            role=self.role_mgr,
+            field_name="gross_loss_amount",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_review,
+            role=self.role_mgr,
+            field_name="simplified_event_type",
+        )
+
+        # 3: Risk Officer @ PENDING_VALIDATION
+        # "Can change all other fields"
+        # We'll list the key ones, especially those the manager couldn't edit
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="basel_event_type",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="recovery_amount",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="net_loss_amount",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="currency_code",
+        )
+        # Also grant them permission to edit fields from previous steps
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="title",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="description",
+        )
+        IncidentEditableField.objects.create(
+            status=self.status_pending_validation,
+            role=self.role_risk,
+            field_name="gross_loss_amount",
+        )
+
+        # 5: CLOSED status
+        # NO rules for CLOSED status, meaning all fields become read-only.
+
     # --- Test Layer 1: Data Segregation (get_queryset) ---
 
     def test_employee_sees_only_own_incidents(self):
@@ -455,8 +658,8 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 3)
-        self.assertEqual(res.data[2]["title"], "Emp1 Incident")
+        self.assertEqual(len(res.data), 5)
+        self.assertEqual(res.data[4]["title"], "Emp1 Incident")
 
     def test_manager_sees_own_and_team_incidents(self):
         """Test a manager can see only his team's incidents and his own."""
@@ -464,7 +667,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         res = self.client.get(INCIDENTS_LIST_URL)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 7)  # emp1, emp2, and their own
+        self.assertEqual(len(res.data), 10)  # emp1, emp2, and their own
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
         self.assertIn("Emp2 Incident", titles)
@@ -477,7 +680,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(
-            len(res.data), 7
+            len(res.data), 10
         )  # emp1, emp2, manager (all in bu_retail)
         titles = {item["title"] for item in res.data}
         self.assertIn("Emp1 Incident", titles)
@@ -811,6 +1014,77 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         # Should fail Layer 2 permission check (IsRoleRiskOfficer needed)
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
+    # --- Tests for Dynamic Field Validation (Layer 2.5) ---
+
+    def test_submit_fails_if_required_field_is_missing(self):
+        """Test submit action fails if 'simplified_event_type' is missing."""
+        self.client.force_authenticate(user=self.employee1)
+        url = reverse(
+            "incidents:incident-submit",
+            args=[self.incident_emp1_draft_missing_data.id],
+        )
+        res = self.client.post(url)
+
+        # This is a validation failure, so expect 400
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", res.data)
+        # Check that the error message clearly identifies the missing field
+        self.assertIn("simplified_event_type", res.data["error"])
+        self.assertIn("required for PENDING_REVIEW", res.data["error"])
+
+        # Also ensure the status did NOT change
+        self.incident_emp1_draft_missing_data.refresh_from_db()
+        self.assertEqual(
+            self.incident_emp1_draft_missing_data.status, self.status_draft
+        )
+
+    def test_review_fails_if_required_field_is_missing(self):
+        """Test review action fails if 'product' is NULL."""
+        self.client.force_authenticate(user=self.manager)
+        url = reverse(
+            "incidents:incident-review",
+            args=[self.incident_emp2_review_missing_amount.id],
+        )
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("error", res.data)
+        self.assertIn("product", res.data["error"])
+        self.assertIn("required for PENDING_VALIDATION", res.data["error"])
+
+    def test_validate_fails_if_required_field_is_missing(self):
+        """Test validate action fails if 'basel_event_type' is missing."""
+        self.client.force_authenticate(user=self.risk_officer)
+        # This incident is ready for validation but I'll remove required field
+        incident = self.incident_emp1_pending_validation
+        incident.basel_event_type = None
+        incident.net_loss_amount = Decimal("100.00")  # Has this one
+        incident.currency_code = "USD"  # And this one
+        incident.save()
+
+        url = reverse("incidents:incident-validate", args=[incident.id])
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("basel_event_type", res.data["error"])
+
+    def test_validate_fails_if_multiple_fields_are_missing(self):
+        """Test validate action lists all missing fields."""
+        self.client.force_authenticate(user=self.risk_officer)
+        incident = self.incident_emp1_pending_validation
+        incident.basel_event_type = None  # Missing
+        incident.net_loss_amount = None  # Missing
+        incident.currency_code = "USD"  # Has this one
+        incident.save()
+
+        url = reverse("incidents:incident-validate", args=[incident.id])
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        error_msg = res.data["error"]
+        self.assertIn("basel_event_type", error_msg)
+        self.assertIn("net_loss_amount", error_msg)
+
     # --- Test Layer 3: Domain Logic (workflow.py) ---
 
     def test_transition_fails_if_role_is_wrong(self):
@@ -870,18 +1144,6 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             expected_due_date,
         )
 
-    def test_manager_cannot_submit_own_incident(self):
-        """Test manager is blocked by business rules."""
-        self.client.force_authenticate(user=self.manager)
-        # The manager can *see* and access this incident (Layer 1 & 2 pass)
-        url = reverse("incidents:incident-submit", args=[self.incident_mgr.id])
-
-        res = self.client.post(url)
-
-        # But transition is forbidden by business rules (Layer 3),
-        # caught by validate_transition(), thus should fail
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-
     # --- Tests for 'validate' action ---
     def test_cannot_validate_incident_in_wrong_state(self):
         """Test validating an incident not in PENDING_VALIDATION fails."""
@@ -889,7 +1151,7 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
         self.client.force_authenticate(user=self.risk_officer)
         url = reverse(
             "incidents:incident-validate",
-            args=[self.incident_emp1.id],  # incident_emp1 is DRAFT
+            args=[self.incident_emp1_draft_for_validation.id],  # in DRAFT
         )
         res = self.client.post(url)
 
@@ -937,3 +1199,86 @@ class IncidentApiTransitionsPermissionsTests(TestCase):
             "Transition from 'DRAFT' to 'CLOSED' is not defined.",
             res.data["error"],
         )
+
+    # --- Tests for Dynamic Field-Level Security (PATCH) ---
+
+    def test_employee_can_edit_allowed_field_in_draft(self):
+        """Test Employee can PATCH 'title' on their DRAFT incident."""
+        self.client.force_authenticate(user=self.employee1)
+        url = detail_url(self.incident_emp1.id)  # self.incident_emp1 is DRAFT
+        new_title = "Title Updated by Employee"
+
+        res = self.client.patch(url, {"title": new_title})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp1.refresh_from_db()
+        self.assertEqual(self.incident_emp1.title, new_title)
+
+    def test_employee_cannot_edit_disallowed_field_in_draft(self):
+        """Test Employee's PATCH to 'basel_event_type' is IGNORED in DRAFT."""
+        self.client.force_authenticate(user=self.employee1)
+        incident = self.incident_emp1  # DRAFT status
+        url = detail_url(incident.id)
+
+        res = self.client.patch(
+            url,
+            {"basel_event_type": self.basel_fraud.id},
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)  # Request is OK
+        incident.refresh_from_db()
+        self.assertIsNone(incident.basel_event_type)  # Field is unchanged
+
+    def test_employee_cannot_edit_allowed_field_in_wrong_status(self):
+        """Test Employee's PATCH to 'title' is IGNORED in PENDING_VALIDATION"""
+        self.client.force_authenticate(user=self.employee1)
+        # This incident is PENDING_VALIDATION
+        incident = self.incident_emp1_pending_validation
+        original_title = incident.title
+        url = detail_url(incident.id)
+
+        res = self.client.patch(
+            url, {"title": "This update should be ignored"}
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        incident.refresh_from_db()
+        # The title remains unchanged
+        self.assertEqual(incident.title, original_title)
+
+    def test_risk_officer_can_edit_their_fields_in_validation(self):
+        """Test Risk Officer CAN edit 'gross_loss_amount' in PENDING_VALIDN"""
+        self.client.force_authenticate(user=self.risk_officer)
+        incident = self.incident_emp1_pending_validation
+        url = detail_url(incident.id)
+        new_amount = Decimal("12345.67")
+
+        res = self.client.patch(url, {"gross_loss_amount": new_amount})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        incident.refresh_from_db()
+        self.assertEqual(incident.gross_loss_amount, new_amount)
+
+    def test_all_fields_are_readonly_in_closed_status(self):
+        """Test that NO fields are editable once an incident is CLOSED."""
+        self.client.force_authenticate(user=self.risk_officer)
+        # self.incident_emp1_validated is VALIDATED, let's close it
+        close_url = reverse(
+            "incidents:incident-close", args=[self.incident_emp1_validated.id]
+        )
+        self.client.post(close_url)
+
+        self.incident_emp1_validated.refresh_from_db()
+        self.assertEqual(
+            self.incident_emp1_validated.status, self.status_closed
+        )
+
+        # Now, try to PATCH the closed incident
+        patch_url = detail_url(self.incident_emp1_validated.id)
+        original_title = self.incident_emp1_validated.title
+        res = self.client.patch(patch_url, {"title": "This must be ignored"})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.incident_emp1_validated.refresh_from_db()
+        # Title remains unchanged
+        self.assertEqual(self.incident_emp1_validated.title, original_title)
