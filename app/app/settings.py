@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "references",
     "incidents",
     "notifications",
+    "measures",
 ]
 
 MIDDLEWARE = [
