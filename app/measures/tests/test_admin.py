@@ -49,7 +49,7 @@ class MeasureAdminTests(TestCase):
     def test_measure_list_display_fields(self):
         """Test that list_display fields render correctly."""
 
-        status = MeasureStatusRef.objects.create(code="OPEN", name="Open")
+        status, _ = MeasureStatusRef.objects.get_or_create(code="OPEN")
         measure = Measure.objects.create(
             description="Test measure",
             created_by=self.admin_user,
@@ -60,7 +60,7 @@ class MeasureAdminTests(TestCase):
         response = self.client.get(url)
 
         self.assertContains(response, measure.description)
-        self.assertContains(response, "Open")
+        self.assertContains(response, status.name)
 
     def test_measure_search(self):
         """Test search functionality in admin."""
@@ -76,8 +76,10 @@ class MeasureAdminTests(TestCase):
 
     def test_measure_filter_by_status(self):
         """Test filtering measures by status."""
-        status_open = MeasureStatusRef.objects.create(code="OPEN", name="Open")
-        status_done = MeasureStatusRef.objects.create(code="DONE", name="Done")
+        status_open, _ = MeasureStatusRef.objects.get_or_create(code="OPEN")
+        status_done, _ = MeasureStatusRef.objects.get_or_create(
+            code="COMPLETED"
+        )
 
         Measure.objects.create(
             description="Open measure",

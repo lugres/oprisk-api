@@ -128,6 +128,7 @@ CREATE TABLE incident_status_ref (
   name VARCHAR(100) NOT NULL
 );
 
+-- + measures
 CREATE TABLE measure_status_ref (
   id SERIAL PRIMARY KEY,
   code VARCHAR(50) UNIQUE NOT NULL,     -- e.g., 'OPEN','IN_PROGRESS','DONE','OVERDUE','CANCELLED'
@@ -249,6 +250,7 @@ CREATE TABLE controls (
     updated_at TIMESTAMPTZ
 );
 
+-- + measures
 CREATE TABLE measures (
     id SERIAL PRIMARY KEY,
     description TEXT NOT NULL,
