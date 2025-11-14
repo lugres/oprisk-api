@@ -21,6 +21,27 @@ class MeasureStatusRef(models.Model):
         return self.name
 
 
+class MeasureEditableField(models.Model):
+    """
+    Configuration model to define which roles can edit which fields
+    at a specific measure status.
+    """
+
+    status = models.ForeignKey(MeasureStatusRef, on_delete=models.CASCADE)
+    role = models.ForeignKey("references.Role", on_delete=models.CASCADE)
+    field_name = models.CharField(max_length=100)
+
+    class Meta:
+        unique_together = ("status", "role", "field_name")
+        verbose_name = "Editable Measure Field"
+
+    def __str__(self):
+        return (
+            f"[{self.role.name}] can edit [{self.field_name}]"
+            f" at [{self.status.code}]"
+        )
+
+
 class Measure(TimestampedModel, OwnedModel):
     """
     Measures track planned actions (corrective or preventive).
@@ -47,6 +68,9 @@ class Measure(TimestampedModel, OwnedModel):
     )
     closed_at = models.DateTimeField(blank=True, null=True)
     closure_comment = models.TextField(blank=True, null=True)
+
+    # Unified log for reasons, evidence, and comments
+    notes = models.TextField(blank=True, default="")
 
     def __str__(self):
         return self.description[:50]

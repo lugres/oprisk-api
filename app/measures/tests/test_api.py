@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 from rest_framework import status
 from datetime import date, timedelta
 
-from measures.models import Measure, MeasureStatusRef  # , MeasureEditableField
+from measures.models import Measure, MeasureStatusRef, MeasureEditableField
 from incidents.models import Incident, IncidentStatusRef as IncidentStatus
 from references.models import Role, BusinessUnit
 
@@ -139,28 +139,31 @@ class MeasureTestBase(TestCase):
             status=self.status_open,
         )
 
-        # # --- configure dynamic field-level security (MeasureEditableField) ---
+        # -- configure dynamic field-level security (MeasureEditableField) --
 
-        # # OPEN: responsible can edit description/deadline
-        # MeasureEditableField.objects.get_or_create(
-        #     status=self.status_open,
-        #     role=self.role_emp,
-        #     field_name="description",
-        # )
-        # MeasureEditableField.objects.get_or_create(
-        #     status=self.status_open, role=self.role_emp, field_name="deadline"
-        # )
-        # # IN_PROGRESS: responsible can edit description, Risk Officer can edit deadline
-        # MeasureEditableField.objects.get_or_create(
-        #     status=self.status_in_progress,
-        #     role=self.role_emp,
-        #     field_name="description",
-        # )
-        # MeasureEditableField.objects.get_or_create(
-        #     status=self.status_in_progress,
-        #     role=self.role_risk,
-        #     field_name="deadline",
-        # )
+        # OPEN: responsible can edit description/deadline
+        MeasureEditableField.objects.get_or_create(
+            status=self.status_open,
+            role=self.role_emp,
+            field_name="description",
+        )
+        MeasureEditableField.objects.get_or_create(
+            status=self.status_open,
+            role=self.role_emp,
+            field_name="deadline",
+        )
+        # IN_PROGRESS: responsible can edit description,
+        # Risk Officer can edit deadline
+        MeasureEditableField.objects.get_or_create(
+            status=self.status_in_progress,
+            role=self.role_emp,
+            field_name="description",
+        )
+        MeasureEditableField.objects.get_or_create(
+            status=self.status_in_progress,
+            role=self.role_risk,
+            field_name="deadline",
+        )
 
 
 class MeasureQuerysetTests(MeasureTestBase):
@@ -322,3 +325,126 @@ class MeasureCRUDTests(MeasureTestBase):
         self.assertTrue(
             Measure.objects.filter(id=self.measure_open.id).exists()
         )
+
+
+class MeasureFieldLevelSecurityTests(MeasureTestBase):
+    """Test dynamic field-level security based on status and role."""
+
+    def test_responsible_can_edit_deadline_in_open(self):
+        """Test responsible user can PATCH deadline in OPEN status."""
+        self.client.force_authenticate(user=self.responsible_user)
+        new_date = date.today() + timedelta(days=5)
+        url = measure_detail_url(self.measure_open.id)
+        res = self.client.patch(url, {"deadline": new_date})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_open.refresh_from_db()
+        self.assertEqual(self.measure_open.deadline, new_date)
+
+    def test_creator_can_edit_description_in_open(self):
+        """Test creator user can PATCH description in OPEN status."""
+        self.client.force_authenticate(user=self.creator_user)
+        url = measure_detail_url(self.measure_open.id)
+        new_desc = "Updated description by creator"
+        res = self.client.patch(url, {"description": new_desc})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_open.refresh_from_db()
+        self.assertEqual(self.measure_open.description, new_desc)
+
+    def test_creator_cannot_edit_in_progress_measure(self):
+        """Test creator cannot PATCH after measure moves to IN_PROGRESS."""
+        self.client.force_authenticate(user=self.creator_user)
+        url = measure_detail_url(self.measure_in_progress.id)
+        new_desc = "This should fail"
+        original_desc = self.measure_in_progress.description
+        res = self.client.patch(url, {"description": new_desc})
+
+        # Should succeed with 200 but description should be unchanged
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_in_progress.refresh_from_db()
+        self.assertEqual(self.measure_in_progress.description, original_desc)
+
+    def test_responsible_cannot_edit_deadline_in_progress(self):
+        """Test responsible user's PATCH to deadline is IGNORED in IN_PRG."""
+        self.client.force_authenticate(user=self.responsible_user)
+        original_date = self.measure_in_progress.deadline
+        new_date = date.today() + timedelta(days=5)
+        url = measure_detail_url(self.measure_in_progress.id)
+
+        res = self.client.patch(url, {"deadline": new_date})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_in_progress.refresh_from_db()
+        self.assertEqual(
+            self.measure_in_progress.deadline, original_date
+        )  # Unchanged
+
+    def test_risk_officer_can_edit_deadline_in_progress(self):
+        """Test Risk Officer CAN PATCH deadline in IN_PROGRESS status."""
+        self.client.force_authenticate(user=self.risk_officer)
+        new_date = date.today() + timedelta(days=5)
+        url = measure_detail_url(self.measure_in_progress.id)
+
+        res = self.client.patch(url, {"deadline": new_date})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_in_progress.refresh_from_db()
+        self.assertEqual(
+            self.measure_in_progress.deadline, new_date
+        )  # Changed
+
+    def test_risk_officer_cannot_edit_other_bu_measure(self):
+        """Test risk officer cannot edit measures from other BUs."""
+        other_bu_user = create_user(
+            "otherbu@example.com", "tstpsw123", self.role_emp, self.bu_risk
+        )
+        other_bu_measure = Measure.objects.create(
+            description="Different BU measure",
+            created_by=other_bu_user,
+            responsible=other_bu_user,
+            status=self.status_in_progress,
+        )
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_detail_url(other_bu_measure.id)
+        res = self.client.patch(
+            url, {"deadline": date.today() + timedelta(days=1)}
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_patch_completed_measure_is_read_only(self):
+        """Test PATCH changes are ignored on COMPLETED measures."""
+        completed_measure = Measure.objects.create(
+            description="Completed measure",
+            created_by=self.creator_user,
+            responsible=self.responsible_user,
+            status=self.status_completed,
+        )
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_detail_url(completed_measure.id)
+        res = self.client.patch(url, {"description": "Try to edit"})
+
+        # Should succeed but changes should be ignored
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        completed_measure.refresh_from_db()
+        self.assertEqual(completed_measure.description, "Completed measure")
+
+    def test_patch_cancelled_measure_is_read_only(self):
+        """Test PATCH changes are ignored on CANCELLED measures."""
+        cancelled_measure = Measure.objects.create(
+            description="Cancelled measure",
+            created_by=self.creator_user,
+            responsible=self.responsible_user,
+            status=self.status_cancelled,
+        )
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_detail_url(cancelled_measure.id)
+        res = self.client.patch(url, {"description": "Try to edit"})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        cancelled_measure.refresh_from_db()
+        self.assertEqual(cancelled_measure.description, "Cancelled measure")
