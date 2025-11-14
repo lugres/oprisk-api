@@ -689,9 +689,208 @@ class MeasureCommentTests(MeasureTestBase):
         payload = {"comment": "Progress update."}
         res = self.client.post(url, payload)
 
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.measure_in_progress.refresh_from_db()
 
         self.assertIn(payload["comment"], self.measure_in_progress.notes)
         self.assertIn(
             self.responsible_user.email, self.measure_in_progress.notes
         )
+
+
+class MeasureLinkingTests(MeasureTestBase):
+    """Test linking/unlinking measures to incidents/risks."""
+
+    def test_link_to_incident_succeeds(self):
+        """Test linking a measure to an incident."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_open.id, "link-to-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn(self.measure_open, self.incident.measures.all())
+
+    def test_responsible_user_can_link_to_incident(self):
+        """Test responsible user can link their measure to an incident."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(self.measure_open.id, "link-to-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn(self.measure_open, self.incident.measures.all())
+
+    def test_manager_can_link_to_incident(self):
+        """Test manager can link measures to incidents."""
+        self.client.force_authenticate(user=self.manager)
+        url = measure_action_url(self.measure_open.id, "link-to-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn(self.measure_open, self.incident.measures.all())
+
+    def test_unrelated_user_cannot_link_to_incident(self):
+        """Test unrelated user cannot link measures to incidents."""
+        self.client.force_authenticate(user=self.other_user)
+        url = measure_action_url(self.measure_open.id, "link-to-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_link_to_incident_fails_if_already_linked(self):
+        """Test linking an already-linked measure returns an error."""
+        self.incident.measures.add(self.measure_open)  # Link it first
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_open.id, "link-to-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already linked", str(res.data))
+
+    def test_link_to_incident_fails_if_measure_is_cancelled(self):
+        """Test linking a CANCELLED measure is not allowed."""
+        self.measure_open.status = self.status_cancelled
+        self.measure_open.save()
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_open.id, "link-to-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Cannot link a cancelled measure", str(res.data))
+
+    def test_link_to_nonexistent_incident_fails(self):
+        """Test linking to a non-existent incident returns 404 or 400."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_open.id, "link-to-incident")
+        payload = {"incident_id": 99999}  # Non-existent
+        res = self.client.post(url, payload)
+
+        self.assertIn(
+            res.status_code,
+            [status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND],
+        )
+
+    def test_unlink_from_incident_succeeds(self):
+        """Test unlinking a measure from an incident."""
+        self.incident.measures.add(self.measure_open)  # Link it first
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_open.id, "unlink-from-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertNotIn(self.measure_open, self.incident.measures.all())
+
+    def test_unlink_from_incident_fails_if_not_linked(self):
+        """Test unlinking a non-existent link returns an error."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_open.id, "unlink-from-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("is not linked", str(res.data))
+
+
+class MeasureValidationTests(MeasureTestBase):
+    """Test input validation and business rules."""
+
+    def test_create_measure_without_description_fails(self):
+        """Test creating measure without description fails validation."""
+        self.client.force_authenticate(user=self.manager)
+        payload = {
+            "responsible": self.responsible_user.id
+            # Missing description
+        }
+        res = self.client.post(measure_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("description", str(res.data))
+
+    def test_create_measure_with_past_deadline_fails(self):
+        """Test creating measure with past deadline fails validation."""
+        self.client.force_authenticate(user=self.manager)
+        payload = {
+            "description": "Test measure",
+            "responsible": self.responsible_user.id,
+            "deadline": date.today() - timedelta(days=1),  # Past date
+        }
+        res = self.client.post(measure_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("deadline", str(res.data))
+
+    def test_evidence_minimum_length_validation(self):
+        """Test evidence must be substantial (e.g., min 10 characters)."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(
+            self.measure_in_progress.id, "submit-for-review"
+        )
+        payload = {"evidence": "Done"}  # Too short
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_create_measure_with_link_at_creation(self):
+        """Test creating a measure and linking to incident in one request."""
+        self.client.force_authenticate(user=self.manager)
+        payload = {
+            "description": "Measure with immediate link",
+            "responsible": self.responsible_user.id,
+            "deadline": date.today() + timedelta(days=15),
+            "incident_id": self.incident.id,
+        }
+        res = self.client.post(measure_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        measure = Measure.objects.get(id=res.data["id"])
+        self.assertIn(measure, self.incident.measures.all())
+
+    def test_create_measure_with_invalid_responsible_fails(self):
+        """Test creating measure with non-existent responsible user fails."""
+        self.client.force_authenticate(user=self.manager)
+        payload = {
+            "description": "Test measure",
+            "responsible": 99999,  # Non-existent user
+            "deadline": date.today() + timedelta(days=15),
+        }
+        res = self.client.post(measure_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cancel_requires_reason(self):
+        """Test cancel action requires a reason payload."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_in_progress.id, "cancel")
+        res = self.client.post(url, {})  # Missing reason
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reason", str(res.data))
+
+    def test_complete_requires_closure_comment(self):
+        """Test complete action requires a closure_comment payload."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_pending_review.id, "complete")
+        res = self.client.post(url, {})  # Missing closure_comment
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("closure_comment", str(res.data))
+
+    def test_return_to_progress_requires_reason(self):
+        """Test return_to_progress action requires a reason payload."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(
+            self.measure_pending_review.id, "return-to-progress"
+        )
+        res = self.client.post(url, {})  # Missing reason
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reason", str(res.data))
