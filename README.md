@@ -12,13 +12,18 @@ This project is based on [Oprisk database project](https://github.com/lugres/opr
 
 This platform is designed to be the single source of truth for all operational risk activities.
 
-### Incident Management (Current Focus)
+### Incident Management
 
 The first-built module manages the complete lifecycle of operational risk events. Its logic is governed by a sophisticated workflow engine that includes:
 * A role-based, multi-stage state machine (e.g., `DRAFT` -> `PENDING_REVIEW` -> `VALIDATION`).
 * Data-driven rules for transitions, required fields, and field-level editability.
 * Automatic, state-based SLA timer calculation.
 * Asynchronous, rule-based notification routing for awareness (e.g., alerting the Fraud team immediately once Fraud incident is registered).
+
+### Measures & Corrective Actions (In Development)
+This module manages the lifecycle of corrective and preventive actions. Measures can be linked to Incidents (and later, Risks) to track remediation. 
+* It features its own auditable, four-stage workflow (OPEN → IN_PROGRESS → PENDING_REVIEW → COMPLETED), ensuring that actions are verified by a Risk Officer before closure. 
+* The API provides dedicated endpoints for state transitions, linking, and logging evidence, with dynamic permissions that lock key fields (like deadline) once work is in progress.
 
 ### Planned Modules (Future Work)
 
@@ -69,3 +74,5 @@ For a deeper dive into the system's design and business rules, please see the fo
 * **[Project Architecture](./docs/architecture.md)**: A detailed breakdown of the 3-layer architectural pattern, permission models, and notification system.
 * **[Incident Workflow Rules](./docs/incident_workflow_rules.md)**: A complete specification of the incident state machine, SLA logic, and dynamic field rules.
 * **[Incident API Contracts](./docs/incident_api_contracts.md)**: High-level documentation for the main Incident API endpoints and workflow actions.
+* **[Measure Workflow Rules](./docs/measure_workflow_rules.md)**: A complete specification of the measure state machine, SLA logic, and dynamic field rules.
+* **[Measure API Contracts](./docs/measure_api_contracts.md)**: High-level documentation for the main Measure API endpoints and workflow actions.
