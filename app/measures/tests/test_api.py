@@ -448,3 +448,250 @@ class MeasureFieldLevelSecurityTests(MeasureTestBase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         cancelled_measure.refresh_from_db()
         self.assertEqual(cancelled_measure.description, "Cancelled measure")
+
+
+class MeasureWorkflowTests(MeasureTestBase):
+    """Test state machine transitions and workflow actions."""
+
+    def test_responsible_can_start_progress(self):
+        """Test responsible user can move status OPEN -> IN_PROGRESS."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(self.measure_open.id, "start-progress")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_open.refresh_from_db()
+        self.assertEqual(self.measure_open.status, self.status_in_progress)
+
+    def test_manager_can_start_progress_for_their_report(self):
+        """Test manager can move status OPEN -> IN_PRG for their reports."""
+        self.client.force_authenticate(user=self.manager)
+        url = measure_action_url(self.measure_open.id, "start-progress")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_open.refresh_from_db()
+        self.assertEqual(self.measure_open.status, self.status_in_progress)
+
+    def test_other_user_cannot_start_progress(self):
+        """Test a user who is not responsible cannot start progress."""
+        self.client.force_authenticate(user=self.other_user)
+        url = measure_action_url(self.measure_open.id, "start-progress")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_start_progress_fails_if_already_in_progress(self):
+        """Test cannot start progress on a measure already in progress."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(self.measure_in_progress.id, "start-progress")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_responsible_can_submit_for_review_with_evidence(self):
+        """Test responsible user can move IN_PROGRESS -> PENDING_REVIEW."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(
+            self.measure_in_progress.id, "submit-for-review"
+        )
+        payload = {"evidence": "Completed the task, server logs attached."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_in_progress.refresh_from_db()
+        self.assertEqual(
+            self.measure_in_progress.status, self.status_pending_review
+        )
+        self.assertIn(payload["evidence"], self.measure_in_progress.notes)
+
+    def test_manager_can_submit_for_review_for_their_report(self):
+        """Test manager can move IN_PROGRESS -> PENDING_REVIEW
+        for their reports."""
+        self.client.force_authenticate(user=self.manager)
+        url = measure_action_url(
+            self.measure_in_progress.id, "submit-for-review"
+        )
+        payload = {"evidence": "Manager submitting on behalf of team member."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_in_progress.refresh_from_db()
+        self.assertEqual(
+            self.measure_in_progress.status, self.status_pending_review
+        )
+
+    def test_submit_for_review_fails_without_evidence(self):
+        """Test submit_for_review fails without 'evidence' payload."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(
+            self.measure_in_progress.id, "submit-for-review"
+        )
+        res = self.client.post(url, {})  # Missing payload
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("evidence", str(res.data))
+
+    def test_submit_for_review_fails_from_open(self):
+        """Test cannot submit for review from OPEN status."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(self.measure_open.id, "submit-for-review")
+        payload = {"evidence": "Test"}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_risk_officer_can_return_to_progress_with_reason(self):
+        """Test Risk Officer can move PENDING_REVIEW -> IN_PROGRESS."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(
+            self.measure_pending_review.id, "return-to-progress"
+        )
+        payload = {"reason": "Evidence is not sufficient."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_pending_review.refresh_from_db()
+        self.assertEqual(
+            self.measure_pending_review.status, self.status_in_progress
+        )
+        self.assertIn(payload["reason"], self.measure_pending_review.notes)
+
+    def test_return_to_progress_fails_as_responsible_user(self):
+        """Test responsible user cannot return a measure to progress."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(
+            self.measure_pending_review.id, "return-to-progress"
+        )
+        payload = {"reason": "I made a mistake"}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_risk_officer_can_complete_with_comment(self):
+        """Test Risk Officer can move PENDING_REVIEW -> COMPLETED."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_pending_review.id, "complete")
+        payload = {"closure_comment": "Verified and confirmed."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_pending_review.refresh_from_db()
+        self.assertEqual(
+            self.measure_pending_review.status, self.status_completed
+        )
+        self.assertEqual(
+            self.measure_pending_review.closure_comment,
+            payload["closure_comment"],
+        )
+
+    def test_complete_fails_from_in_progress(self):
+        """Test cannot complete directly from IN_PROGRESS
+        (must go through review)."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_in_progress.id, "complete")
+        payload = {"closure_comment": "Test"}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_risk_officer_can_cancel_in_progress_measure_with_reason(self):
+        """Test Risk Officer can CANCEL an IN_PROGRESS measure."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_in_progress.id, "cancel")
+        payload = {"reason": "No longer required."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_in_progress.refresh_from_db()
+        self.assertEqual(
+            self.measure_in_progress.status, self.status_cancelled
+        )
+        self.assertIn(payload["reason"], self.measure_in_progress.notes)
+
+    def test_cancel_fails_on_open_measure(self):
+        """Test CANCEL action is not allowed on an OPEN measure
+        (use DELETE)."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_open.id, "cancel")
+        payload = {"reason": "Test"}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Cannot cancel", str(res.data))
+
+    def test_evidence_includes_timestamp_and_user(self):
+        """Test that evidence submissions are timestamped and attributed."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(
+            self.measure_in_progress.id, "submit-for-review"
+        )
+        payload = {"evidence": "Task completed successfully."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_in_progress.refresh_from_db()
+
+        # Check that notes contain evidence, username, and timestamp
+        self.assertIn(payload["evidence"], self.measure_in_progress.notes)
+        self.assertIn(
+            self.responsible_user.email, self.measure_in_progress.notes
+        )
+
+
+class MeasureCommentTests(MeasureTestBase):
+    """Test comment functionality and permissions."""
+
+    def test_responsible_user_can_add_comment(self):
+        """Test the dedicated add_comment endpoint."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(self.measure_in_progress.id, "add-comment")
+        payload = {"comment": "This is a progress update."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_in_progress.refresh_from_db()
+        self.assertIn(payload["comment"], self.measure_in_progress.notes)
+
+    def test_manager_can_add_comment(self):
+        """Test manager can add comments to measures."""
+        self.client.force_authenticate(user=self.manager)
+        url = measure_action_url(self.measure_in_progress.id, "add-comment")
+        payload = {"comment": "Manager's progress check."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.measure_in_progress.refresh_from_db()
+        self.assertIn(payload["comment"], self.measure_in_progress.notes)
+
+    def test_risk_officer_can_add_comment(self):
+        """Test risk officer can add comments."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(self.measure_in_progress.id, "add-comment")
+        payload = {"comment": "Risk officer audit note."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_unrelated_user_cannot_add_comment(self):
+        """Test unrelated user cannot add comments."""
+        self.client.force_authenticate(user=self.other_user)
+        url = measure_action_url(self.measure_in_progress.id, "add-comment")
+        payload = {"comment": "This should fail"}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_comment_includes_timestamp_and_user(self):
+        """Test that comments are timestamped and attributed."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(self.measure_in_progress.id, "add-comment")
+        payload = {"comment": "Progress update."}
+        res = self.client.post(url, payload)
+
+        self.measure_in_progress.refresh_from_db()
+
+        self.assertIn(payload["comment"], self.measure_in_progress.notes)
+        self.assertIn(
+            self.responsible_user.email, self.measure_in_progress.notes
+        )
