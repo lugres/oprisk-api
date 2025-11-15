@@ -894,3 +894,344 @@ class MeasureValidationTests(MeasureTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("reason", str(res.data))
+
+
+class MeasureFilteringTests(MeasureTestBase):
+    """Test query parameter filtering and search functionality."""
+
+    def test_filter_by_status(self):
+        """Test filtering measures by status."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{measure_list_url()}?status=OPEN"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Should only include OPEN measures
+        for measure in res.data:
+            self.assertEqual(measure["status"], "OPEN")
+
+    def test_filter_by_responsible_me(self):
+        """Test filtering by responsible=me."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = f"{measure_list_url()}?responsible=me"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Should only include measures assigned to responsible_user
+        for measure in res.data:
+            self.assertEqual(
+                measure["responsible"]["id"],
+                self.responsible_user.id,
+            )
+
+    def test_filter_by_created_by_me(self):
+        """Test filtering by created_by=me."""
+        self.client.force_authenticate(user=self.creator_user)
+        url = f"{measure_list_url()}?created_by=me"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Should only include measures created by creator_user
+        for measure in res.data:
+            self.assertEqual(
+                measure["created_by"]["id"],
+                self.creator_user.id,
+            )
+
+    def test_filter_by_incident(self):
+        """Test filtering by incident_id."""
+        self.incident.measures.add(self.measure_open)
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{measure_list_url()}?incident={self.incident.id}"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Should only include measures linked to this incident
+        measure_ids = [m["id"] for m in res.data]
+        self.assertIn(self.measure_open.id, measure_ids)
+
+    def test_filter_by_deadline_before(self):
+        """Test filtering by deadline_before."""
+        self.client.force_authenticate(user=self.risk_officer)
+        filter_date = date.today() + timedelta(days=15)
+        url = f"{measure_list_url()}?deadline_before={filter_date}"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # All returned measures should have deadline before filter_date
+        for measure in res.data:
+            if measure.get("deadline"):
+                measure_date = date.fromisoformat(measure["deadline"])
+                self.assertLessEqual(measure_date, filter_date)
+
+    def test_filter_is_overdue(self):
+        """Test filtering for overdue measures."""
+        # Create an overdue measure
+        overdue_measure = Measure.objects.create(
+            description="Overdue measure",
+            created_by=self.creator_user,
+            responsible=self.responsible_user,
+            status=self.status_in_progress,
+            deadline=date.today() - timedelta(days=5),
+        )
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{measure_list_url()}?is_overdue=true"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        measure_ids = [m["id"] for m in res.data]
+        self.assertIn(overdue_measure.id, measure_ids)
+
+    def test_search_in_description(self):
+        """Test full-text search in description."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{measure_list_url()}?search=Open"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Should find measure with "Open" in description
+        measure_ids = [m["id"] for m in res.data]
+        self.assertIn(self.measure_open.id, measure_ids)
+
+    def test_ordering_by_deadline(self):
+        """Test ordering results by deadline."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{measure_list_url()}?ordering=deadline"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Check that results are ordered by deadline
+        deadlines = [m["deadline"] for m in res.data if m.get("deadline")]
+        self.assertEqual(deadlines, sorted(deadlines))
+
+
+class MeasureResponseFormatTests(MeasureTestBase):
+    """Test API response format and structure."""
+
+    def test_measure_detail_includes_available_transitions(self):
+        """Test that measure detail includes available_transitions."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_detail_url(self.measure_open.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("available_transitions", res.data)
+
+        # OPEN measure should have start-progress available
+        transition_actions = [
+            t["action"] for t in res.data["available_transitions"]
+        ]
+        self.assertIn("start-progress", transition_actions)
+
+    def test_measure_detail_includes_permissions(self):
+        """Test that measure detail includes permissions object."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_detail_url(self.measure_open.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("permissions", res.data)
+        self.assertIn("can_edit", res.data["permissions"])
+        self.assertIn("can_delete", res.data["permissions"])
+        self.assertIn("can_transition", res.data["permissions"])
+
+    def test_measure_detail_includes_linked_incidents(self):
+        """Test that measure detail includes linked_incidents."""
+        self.incident.measures.add(self.measure_open)
+
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_detail_url(self.measure_open.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("linked_incidents", res.data)
+        self.assertEqual(len(res.data["linked_incidents"]), 1)
+        self.assertEqual(
+            res.data["linked_incidents"][0]["id"], self.incident.id
+        )
+
+    def test_measure_detail_includes_is_overdue(self):
+        """Test that measure detail includes is_overdue computed property."""
+        overdue_measure = Measure.objects.create(
+            description="Overdue measure",
+            created_by=self.creator_user,
+            responsible=self.responsible_user,
+            status=self.status_in_progress,
+            deadline=date.today() - timedelta(days=5),
+        )
+
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_detail_url(overdue_measure.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("is_overdue", res.data)
+        self.assertTrue(res.data["is_overdue"])
+
+    def test_measure_list_uses_pagination(self):
+        """Test that list endpoint uses pagination."""
+        # Create many measures
+        for i in range(60):
+            Measure.objects.create(
+                description=f"Test measure {i}",
+                created_by=self.creator_user,
+                responsible=self.responsible_user,
+                status=self.status_open,
+            )
+
+        self.client.force_authenticate(user=self.risk_officer)
+        res = self.client.get(measure_list_url())
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Should include pagination metadata
+        self.assertIn("count", res.data)
+        self.assertIn("results", res.data)
+        # Results should be limited (default page size, e.g., 50)
+        self.assertLessEqual(len(res.data["results"]), 50)
+
+    def test_error_response_format(self):
+        """Test error responses have consistent format."""
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(self.measure_open.id, "complete")
+        payload = {"closure_comment": "Test"}
+        res = self.client.post(url, payload)
+
+        # Should fail with 400 or 403
+        self.assertIn(
+            res.status_code,
+            [status.HTTP_400_BAD_REQUEST, status.HTTP_403_FORBIDDEN],
+        )
+        # Should have error message
+        self.assertTrue(isinstance(res.data, dict))
+
+
+class MeasureIntegrationTests(MeasureTestBase):
+    """Integration tests for complex workflows and edge cases."""
+
+    def test_full_measure_lifecycle(self):
+        """Test complete workflow:
+        OPEN -> IN_PROGRESS -> PENDING_REVIEW -> COMPLETED."""
+        # Create measure as manager
+        self.client.force_authenticate(user=self.manager)
+        payload = {
+            "description": "Full lifecycle test",
+            "responsible": self.responsible_user.id,
+            "deadline": date.today() + timedelta(days=30),
+        }
+        res = self.client.post(measure_list_url(), payload)
+        measure_id = res.data["id"]
+
+        # Start progress as responsible user
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(measure_id, "start-progress")
+        res = self.client.post(url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Submit for review
+        url = measure_action_url(measure_id, "submit-for-review")
+        res = self.client.post(
+            url, {"evidence": "Task completed successfully."}
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Complete as risk officer
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(measure_id, "complete")
+        res = self.client.post(
+            url, {"closure_comment": "Verified and approved."}
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Verify final state
+        measure = Measure.objects.get(id=measure_id)
+        self.assertEqual(measure.status, self.status_completed)
+        self.assertIsNotNone(measure.closed_at)
+
+    def test_review_rejection_cycle(self):
+        """Test PENDING_REVIEW -> IN_PROGRESS -> PENDING_REVIEW workflow."""
+        # Submit for review
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(
+            self.measure_in_progress.id, "submit-for-review"
+        )
+        res = self.client.post(url, {"evidence": "Initial submission."})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Risk officer returns to progress
+        self.client.force_authenticate(user=self.risk_officer)
+        url = measure_action_url(
+            self.measure_in_progress.id, "return-to-progress"
+        )
+        res = self.client.post(url, {"reason": "More detail needed."})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Responsible resubmits
+        self.client.force_authenticate(user=self.responsible_user)
+        url = measure_action_url(
+            self.measure_in_progress.id, "submit-for-review"
+        )
+        res = self.client.post(url, {"evidence": "Updated with more detail."})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Verify notes contain both submissions
+        self.measure_in_progress.refresh_from_db()
+        self.assertIn("Initial submission", self.measure_in_progress.notes)
+        self.assertIn("More detail needed", self.measure_in_progress.notes)
+        self.assertIn(
+            "Updated with more detail", self.measure_in_progress.notes
+        )
+
+    def test_measure_linking_to_multiple_incidents(self):
+        """Test linking one measure to multiple incidents."""
+        # Create second incident
+        inc_status, _ = IncidentStatus.objects.get_or_create(
+            code="DRAFT", defaults={"name": "Draft"}
+        )
+        incident2 = Incident.objects.create(
+            title="Second test incident",
+            created_by=self.creator_user,
+            status=inc_status,
+        )
+
+        self.client.force_authenticate(user=self.risk_officer)
+
+        # Link to first incident
+        url = measure_action_url(self.measure_open.id, "link-to-incident")
+        res = self.client.post(url, {"incident_id": self.incident.id})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Link to second incident
+        res = self.client.post(url, {"incident_id": incident2.id})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Verify measure is linked to both
+        self.assertIn(self.measure_open, self.incident.measures.all())
+        self.assertIn(self.measure_open, incident2.measures.all())
+
+    def test_deadline_locked_after_start_progress(self):
+        """Test that deadline becomes locked after starting progress."""
+        # Check deadline is editable in OPEN
+        self.client.force_authenticate(user=self.responsible_user)
+        new_date = date.today() + timedelta(days=20)
+        url = measure_detail_url(self.measure_open.id)
+        res = self.client.patch(url, {"deadline": new_date})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Start progress
+        url = measure_action_url(self.measure_open.id, "start-progress")
+        res = self.client.post(url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Try to edit deadline (should fail for responsible user)
+        url = measure_detail_url(self.measure_open.id)
+        original_deadline = self.measure_open.deadline
+        res = self.client.patch(
+            url, {"deadline": date.today() + timedelta(days=5)}
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        self.measure_open.refresh_from_db()
+        # Deadline should remain unchanged
+        self.assertEqual(self.measure_open.deadline, original_deadline)
