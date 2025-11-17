@@ -3,9 +3,8 @@ Filters for the measures API.
 """
 
 import django_filters
-from django.db.models import Q
 from django.utils import timezone
-from .models import Measure, MeasureStatusRef
+from .models import Measure
 
 
 class MeasureFilter(django_filters.FilterSet):

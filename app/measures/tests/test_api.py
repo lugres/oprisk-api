@@ -175,8 +175,8 @@ class MeasureQuerysetTests(MeasureTestBase):
         res = self.client.get(measure_list_url())
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 3)  # open, in_progress, pending_rev
-        self.assertIn(self.measure_open.description, str(res.data))
+        self.assertEqual(len(res.data["results"]), 3)  # open, in_prg, pen_rev
+        self.assertIn(self.measure_open.description, str(res.data["results"]))
 
     def test_get_queryset_creator_user(self):
         """Test creator user can see measures they created."""
@@ -184,7 +184,7 @@ class MeasureQuerysetTests(MeasureTestBase):
         res = self.client.get(measure_list_url())
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 3)  # open, in_progress, pending_rev
+        self.assertEqual(len(res.data["results"]), 3)  # open, in_prg, pen_rev
 
     def test_get_queryset_manager(self):
         """Test manager can see measures for their team."""
@@ -194,7 +194,7 @@ class MeasureQuerysetTests(MeasureTestBase):
         # Sees measures from responsible_user, creator_user, other_user
         # (all their reports)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 4)
+        self.assertEqual(len(res.data["results"]), 4)
 
     def test_get_queryset_risk_officer(self):
         """Test risk officer can see all measures in their BU."""
@@ -202,7 +202,8 @@ class MeasureQuerysetTests(MeasureTestBase):
         res = self.client.get(measure_list_url())
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(res.data), 4)  # All measures in bu_ops
+        # All measures in bu_ops
+        self.assertEqual(len(res.data["results"]), 4)
 
     def test_risk_officer_cannot_see_other_bu_measures(self):
         """Test risk officer cannot see measures from other BUs."""
@@ -222,7 +223,7 @@ class MeasureQuerysetTests(MeasureTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # Should not include other_bu_measure
-        measure_ids = [m["id"] for m in res.data]
+        measure_ids = [m["id"] for m in res.data["results"]]
         self.assertNotIn(other_bu_measure.id, measure_ids)
 
     def test_unauthenticated_access_fails(self):
@@ -310,7 +311,7 @@ class MeasureCRUDTests(MeasureTestBase):
         url = measure_detail_url(self.measure_in_progress.id)
         res = self.client.delete(url)
 
-        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertTrue(
             Measure.objects.filter(id=self.measure_in_progress.id).exists()
         )
@@ -321,7 +322,8 @@ class MeasureCRUDTests(MeasureTestBase):
         url = measure_detail_url(self.measure_open.id)
         res = self.client.delete(url)
 
-        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        # get_queryset handles initial data segregation
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(
             Measure.objects.filter(id=self.measure_open.id).exists()
         )
@@ -479,7 +481,7 @@ class MeasureWorkflowTests(MeasureTestBase):
         url = measure_action_url(self.measure_open.id, "start-progress")
         res = self.client.post(url)
 
-        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_start_progress_fails_if_already_in_progress(self):
         """Test cannot start progress on a measure already in progress."""
@@ -614,7 +616,7 @@ class MeasureWorkflowTests(MeasureTestBase):
         (use DELETE)."""
         self.client.force_authenticate(user=self.risk_officer)
         url = measure_action_url(self.measure_open.id, "cancel")
-        payload = {"reason": "Test"}
+        payload = {"reason": "Valid test reason containing ten chars."}
         res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
@@ -680,7 +682,7 @@ class MeasureCommentTests(MeasureTestBase):
         payload = {"comment": "This should fail"}
         res = self.client.post(url, payload)
 
-        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_comment_includes_timestamp_and_user(self):
         """Test that comments are timestamped and attributed."""
@@ -738,7 +740,7 @@ class MeasureLinkingTests(MeasureTestBase):
         payload = {"incident_id": self.incident.id}
         res = self.client.post(url, payload)
 
-        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_link_to_incident_fails_if_already_linked(self):
         """Test linking an already-linked measure returns an error."""
@@ -907,8 +909,8 @@ class MeasureFilteringTests(MeasureTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # Should only include OPEN measures
-        for measure in res.data:
-            self.assertEqual(measure["status"], "OPEN")
+        for measure in res.data["results"]:
+            self.assertEqual(measure["status"]["code"], "OPEN")
 
     def test_filter_by_responsible_me(self):
         """Test filtering by responsible=me."""
@@ -918,7 +920,7 @@ class MeasureFilteringTests(MeasureTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # Should only include measures assigned to responsible_user
-        for measure in res.data:
+        for measure in res.data["results"]:
             self.assertEqual(
                 measure["responsible"]["id"],
                 self.responsible_user.id,
@@ -932,7 +934,7 @@ class MeasureFilteringTests(MeasureTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # Should only include measures created by creator_user
-        for measure in res.data:
+        for measure in res.data["results"]:
             self.assertEqual(
                 measure["created_by"]["id"],
                 self.creator_user.id,
@@ -948,7 +950,7 @@ class MeasureFilteringTests(MeasureTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # Should only include measures linked to this incident
-        measure_ids = [m["id"] for m in res.data]
+        measure_ids = [m["id"] for m in res.data["results"]]
         self.assertIn(self.measure_open.id, measure_ids)
 
     def test_filter_by_deadline_before(self):
@@ -960,7 +962,7 @@ class MeasureFilteringTests(MeasureTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # All returned measures should have deadline before filter_date
-        for measure in res.data:
+        for measure in res.data["results"]:
             if measure.get("deadline"):
                 measure_date = date.fromisoformat(measure["deadline"])
                 self.assertLessEqual(measure_date, filter_date)
@@ -981,7 +983,7 @@ class MeasureFilteringTests(MeasureTestBase):
         res = self.client.get(url)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        measure_ids = [m["id"] for m in res.data]
+        measure_ids = [m["id"] for m in res.data["results"]]
         self.assertIn(overdue_measure.id, measure_ids)
 
     def test_search_in_description(self):
@@ -992,7 +994,7 @@ class MeasureFilteringTests(MeasureTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # Should find measure with "Open" in description
-        measure_ids = [m["id"] for m in res.data]
+        measure_ids = [m["id"] for m in res.data["results"]]
         self.assertIn(self.measure_open.id, measure_ids)
 
     def test_ordering_by_deadline(self):
@@ -1003,7 +1005,9 @@ class MeasureFilteringTests(MeasureTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # Check that results are ordered by deadline
-        deadlines = [m["deadline"] for m in res.data if m.get("deadline")]
+        deadlines = [
+            m["deadline"] for m in res.data["results"] if m.get("deadline")
+        ]
         self.assertEqual(deadlines, sorted(deadlines))
 
 
@@ -1088,6 +1092,7 @@ class MeasureResponseFormatTests(MeasureTestBase):
         # Should include pagination metadata
         self.assertIn("count", res.data)
         self.assertIn("results", res.data)
+        self.assertEqual(res.data["count"], 64)  # 60 + 4 from setUp
         # Results should be limited (default page size, e.g., 50)
         self.assertLessEqual(len(res.data["results"]), 50)
 
@@ -1219,6 +1224,9 @@ class MeasureIntegrationTests(MeasureTestBase):
         res = self.client.patch(url, {"deadline": new_date})
         self.assertEqual(res.status_code, status.HTTP_200_OK)
 
+        # refresh the object after the first PATCH
+        self.measure_open.refresh_from_db()
+
         # Start progress
         url = measure_action_url(self.measure_open.id, "start-progress")
         res = self.client.post(url)
@@ -1226,7 +1234,7 @@ class MeasureIntegrationTests(MeasureTestBase):
 
         # Try to edit deadline (should fail for responsible user)
         url = measure_detail_url(self.measure_open.id)
-        original_deadline = self.measure_open.deadline
+        original_deadline = self.measure_open.deadline  # new date
         res = self.client.patch(
             url, {"deadline": date.today() + timedelta(days=5)}
         )

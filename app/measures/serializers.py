@@ -55,6 +55,7 @@ class MeasureListSerializer(serializers.ModelSerializer):
 
     status = MeasureStatusRefSerializer(read_only=True)
     responsible = UserNestedSerializer(read_only=True)
+    created_by = UserNestedSerializer(read_only=True)
 
     class Meta:
         model = Measure
@@ -63,6 +64,7 @@ class MeasureListSerializer(serializers.ModelSerializer):
             "description",
             "status",
             "responsible",
+            "created_by",
             "deadline",
             "created_at",
         ]
@@ -147,28 +149,6 @@ class MeasureDetailSerializer(serializers.ModelSerializer):
             transitions.append(
                 {"action": "complete", "name": "Complete Measure"}
             )
-
-        # # We'd build a permission helper for this, but for now:
-        # is_responsible = (user == obj.responsible) or (
-        #     user == obj.responsible.manager
-        # )
-        # is_risk_officer = user.role.name == "Risk Officer"
-
-        # if obj.status.code == "OPEN" and is_responsible:
-        #     transitions.append(
-        #         {"action": "start-progress", "name": "Start Progress"}
-        #     )
-        # if obj.status.code == "IN_PROGRESS" and is_responsible:
-        #     transitions.append(
-        #         {"action": "submit-for-review", "name": "Submit for Review"}
-        #     )
-        # if obj.status.code == "PENDING_REVIEW" and is_risk_officer:
-        #     transitions.append(
-        #         {"action": "return-to-progress", "name": "Return to Progress"}
-        #     )
-        #     transitions.append(
-        #         {"action": "complete", "name": "Complete Measure"}
-        #     )
 
         return transitions
 
@@ -269,29 +249,41 @@ class MeasureUpdateSerializer(serializers.ModelSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)  # This sets self.instance
 
-        # Get context passed from the ViewSet
-        context = self.context
-        role = context.get("user_role")
-
-        # Get status from the serializer's instance
-        status_obj = None
-        if hasattr(self, "instance") and self.instance:
-            status_obj = self.instance.status
-
-        # Failsafe: If no role or status, make all fields read-only
-        if not role or not status_obj:
+        # get user from the request in context
+        request = self.context.get("request")
+        if not request:
             for field_name in self.fields:
                 self.fields[field_name].read_only = True
             return
 
-        # Get the set of fields this user is allowed to edit
+        user = request.user
+        role = user.role
+        instance = self.instance
+
+        # if no role or instance (for status), make all fields read-only
+        if not role or not instance:
+            for field_name in self.fields:
+                self.fields[field_name].read_only = True
+            return
+
+        status_obj = instance.status
+
+        # get the set of fields this user is allowed to edit
         editable_fields = set(
             MeasureEditableField.objects.filter(
                 status=status_obj, role=role
             ).values_list("field_name", flat=True)
         )
 
-        # Mark all other fields in this serializer as read-only
+        # custom logic for "responsible" vs "creator"
+        if status_obj.code == "IN_PROGRESS" and user != instance.responsible:
+            # If you are not the responsible user,
+            # you cannot edit the description,
+            # even if your *role* (Employee) would normally allow it.
+            if "description" in editable_fields:
+                editable_fields.remove("description")
+
+        # mark all other fields in this serializer as read-only
         for field_name in self.fields:
             if field_name not in editable_fields:
                 self.fields[field_name].read_only = True

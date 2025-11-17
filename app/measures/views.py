@@ -3,14 +3,14 @@ Views for the measures APIs.
 """
 
 from django.db.models import Q
-from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.pagination import PageNumberPagination
 
-from .models import Measure, MeasureStatusRef
+from .models import Measure
 from . import serializers
 from . import services
 from .workflows import MeasureTransitionError, MeasurePermissionError
@@ -24,6 +24,12 @@ from incidents.permissions import IsRoleRiskOfficer
 from .filters import MeasureFilter
 
 
+class StandardResultsSetPagination(PageNumberPagination):
+    page_size = 50
+    page_size_query_param = "page_size"
+    max_page_size = 100
+
+
 class MeasureViewSet(viewsets.ModelViewSet):
     """View for managing measures APIs."""
 
@@ -32,6 +38,7 @@ class MeasureViewSet(viewsets.ModelViewSet):
     )
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
+    pagination_class = StandardResultsSetPagination
     filterset_class = MeasureFilter
 
     def get_queryset(self):
@@ -143,20 +150,34 @@ class MeasureViewSet(viewsets.ModelViewSet):
         """
         measure = self.get_object()
 
-        # Check permissions
-        perm_check = IsCreatorOrManagerForDelete()
-        if not perm_check.has_object_permission(request, self, measure):
-            raise MeasurePermissionError(
-                "You do not have permission to delete this measure."
-            )
+        try:
+            # Check permissions
+            perm_check = IsCreatorOrManagerForDelete()
+            if not perm_check.has_object_permission(request, self, measure):
+                raise MeasurePermissionError(
+                    "You do not have permission to delete this measure."
+                )
 
-        # Check status (Business Rule)
-        if measure.status.code != "OPEN":
-            raise MeasureTransitionError(
-                "Only OPEN measures can be deleted. Use 'cancel' for other statuses."
-            )
+            # Check status (Business Rule)
+            if measure.status.code != "OPEN":
+                raise MeasureTransitionError(
+                    "Only OPEN measures can be deleted. "
+                    "Use 'cancel' for other statuses."
+                )
 
-        return super().destroy(request, *args, **kwargs)
+            measure.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        except (MeasureTransitionError, MeasurePermissionError) as e:
+            # Return 403 for permission errors, 400 for business logic errors
+            err_status = (
+                status.HTTP_403_FORBIDDEN
+                if isinstance(e, MeasurePermissionError)
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response({"error": str(e)}, status=err_status)
+
+        # return super().destroy(request, *args, **kwargs)
 
     # --- Workflow Actions ---
 

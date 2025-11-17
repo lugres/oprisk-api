@@ -4,9 +4,6 @@ Object-level permissions for measures.
 
 from rest_framework import permissions
 
-# We can re-use these from the incidents app
-# from incidents.permissions import IsRoleRiskOfficer, IsRoleManager
-
 
 class IsMeasureResponsible(permissions.BasePermission):
     """Allows access only to the measure's responsible user."""
@@ -75,9 +72,6 @@ class IsCreatorOrManagerForDelete(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if not obj.created_by:
             return False
-        is_creator = request.user == obj.created_by
-        is_manager = request.user == obj.created_by.manager
-        is_risk = request.user.role.name == "Risk Officer"
 
         # Added Risk Officer based on
         # test_delete_open_measure_as_manager_succeeds

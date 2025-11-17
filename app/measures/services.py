@@ -28,7 +28,7 @@ def create_measure(
     description: str,
     responsible: User,
     deadline: timezone.datetime,
-    incident_id: int = None,
+    incident_id=None,  # incident_id can be obj or int
 ) -> Measure:
     """
     Creates a new measure.
@@ -45,7 +45,11 @@ def create_measure(
     # Handle the "create-and-link" test case
     if incident_id:
         try:
-            incident = Incident.objects.get(id=incident_id)
+            # If it's an Incident object, use it. If it's an int, get it.
+            if isinstance(incident_id, Incident):
+                incident = incident_id
+            else:
+                incident = Incident.objects.get(id=incident_id)
             # We can call our other service function here
             link_measure_to_incident(
                 measure=measure, user=user, incident=incident
@@ -75,7 +79,8 @@ def link_measure_to_incident(
 
     if not created:
         raise MeasureTransitionError(
-            f"Measure {measure.id} is already linked to Incident {incident.id}."
+            f"Measure {measure.id} is already linked to "
+            f"Incident {incident.id}."
         )
 
 
@@ -227,7 +232,8 @@ def cancel(*, measure: Measure, user: User, reason: str) -> Measure:
     # Test for: test_cancel_fails_on_open_measure
     if measure.status.code not in ["IN_PROGRESS", "PENDING_REVIEW"]:
         raise MeasureTransitionError(
-            "Cannot cancel a measure that is not IN_PROGRESS or PENDING_REVIEW. Use DELETE for OPEN measures."
+            "Cannot cancel a measure that is not IN_PROGRESS or PENDING_REVW."
+            " Use DELETE for OPEN measures."
         )
 
     # Permission check (from tests)
