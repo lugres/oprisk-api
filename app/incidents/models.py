@@ -17,7 +17,7 @@ from references.models import (
 )
 
 # from risks.models import Risk # <-- Will be needed for IncidentRisk later
-# from measures.models import Measure # <-- Will be needed for IncidentMeasure
+from measures.models import Measure  # <-- Will be needed for IncidentMeasure
 
 
 # Simplified Event type is moved to "incidents" due to high cohesion
@@ -196,6 +196,14 @@ class Incident(TimestampedModel, OwnedModel):
         LossCause, through="IncidentCause", related_name="incidents"
     )
 
+    # link to measures
+    measures = models.ManyToManyField(
+        Measure,
+        through="IncidentMeasure",  # Use specific join table
+        related_name="incidents",
+        blank=True,
+    )
+
     def __str__(self):
         return self.title
 
@@ -209,6 +217,15 @@ class IncidentCause(models.Model):
 
     class Meta:
         unique_together = (("incident", "loss_cause"),)
+
+
+# through link model to measures for the M2M relationship
+class IncidentMeasure(models.Model):
+    incident = models.ForeignKey(Incident, on_delete=models.CASCADE)
+    measure = models.ForeignKey(Measure, on_delete=models.CASCADE)
+
+    class Meta:
+        unique_together = ("incident", "measure")
 
 
 class IncidentRoutingRule(models.Model):
