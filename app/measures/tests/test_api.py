@@ -620,7 +620,10 @@ class MeasureWorkflowTests(MeasureTestBase):
         res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Cannot cancel", str(res.data))
+        self.assertIn(
+            "Transition from 'OPEN' to 'CANCELLED' is not defined",
+            str(res.data["error"]),
+        )
 
     def test_evidence_includes_timestamp_and_user(self):
         """Test that evidence submissions are timestamped and attributed."""
