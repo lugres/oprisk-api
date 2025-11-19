@@ -900,6 +900,29 @@ class MeasureValidationTests(MeasureTestBase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("reason", str(res.data))
 
+    def test_create_measure_with_nonexistent_incident_fails(self):
+        """Test creating measure with non-existent incident_id fails."""
+        self.client.force_authenticate(user=self.manager)
+        payload = {
+            "description": "Measure with invalid incident",
+            "responsible": self.responsible_user.id,
+            "deadline": date.today() + timedelta(days=15),
+            "incident_id": 99999,  # Non-existent incident
+        }
+        res = self.client.post(measure_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        # DRF returns field-specific validation errors
+        self.assertIn("incident_id", res.data)
+        self.assertIn("does not exist", str(res.data["incident_id"]))
+
+        # Verify measure was NOT created (transaction rollback)
+        self.assertFalse(
+            Measure.objects.filter(
+                description="Measure with invalid incident"
+            ).exists()
+        )
+
 
 class MeasureFilteringTests(MeasureTestBase):
     """Test query parameter filtering and search functionality."""

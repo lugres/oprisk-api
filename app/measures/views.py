@@ -41,27 +41,34 @@ class MeasureViewSet(viewsets.ModelViewSet):
     pagination_class = StandardResultsSetPagination
     filterset_class = MeasureFilter
 
+    def _get_fully_loaded_user(self):
+        """
+        Helper method to get the fully-loaded user object with related data.
+        Returns None if user is not authenticated or doesn't exist.
+        """
+        if not self.request.user.is_authenticated:
+            return None
+
+        try:
+            return (
+                get_user_model()
+                .objects.select_related("role", "manager", "business_unit")
+                .get(id=self.request.user.id)
+            )
+        except get_user_model().DoesNotExist:
+            return None
+
     def get_queryset(self):
         """
         Implement data segregation based on user role.
         """
         # 1. Get the fully-loaded user object for filtering.
-        user = self.request.user
-        if user.is_authenticated:
-            try:
-                # Pre-fetch role and manager for the user
-                user = (
-                    get_user_model()
-                    .objects.select_related("role", "manager")
-                    .get(id=self.request.user.id)
-                )
-            except get_user_model().DoesNotExist:
-                return super().get_queryset().none()
-        else:
+        user = self._get_fully_loaded_user()
+        if not user or not user.role:
             return super().get_queryset().none()
 
         # 2. Start with the base queryset and pre-fetch all
-        #    Measure-related objects we will need for permissions.
+        #    Measure-related objects needed for permissions.
         queryset = (
             super()
             .get_queryset()
@@ -76,7 +83,7 @@ class MeasureViewSet(viewsets.ModelViewSet):
             )
         )
 
-        # 3. Apply role-based filtering (this logic is correct)
+        # 3. Apply role-based filtering
         if not user.role:
             return queryset.none()
 
@@ -138,7 +145,6 @@ class MeasureViewSet(viewsets.ModelViewSet):
         For 'retrieve', also pass contextual permissions.
         """
         context = super().get_serializer_context()
-        # context["user_role"] = self.request.user.role
         context["request"] = self.request  # For DetailSerializer
         return context
 
@@ -150,22 +156,13 @@ class MeasureViewSet(viewsets.ModelViewSet):
         instance = self.get_object()
         context = self.get_serializer_context()
 
-        # Add contextual permissions and transitions for retrieve
-        if request.user.is_authenticated:
-            try:
-                # Get fully-loaded user
-                user = (
-                    get_user_model()
-                    .objects.select_related("role", "manager")
-                    .get(id=request.user.id)
-                )
-                # Get contextual data from service layer
-                contextual_data = services.get_measure_context(
-                    measure=instance, user=user
-                )
-                context.update(contextual_data)
-            except get_user_model().DoesNotExist:
-                pass  # Skip contextual data if user not found
+        # get fully-loaded user, add its contextual data (perms & trans)
+        user = self._get_fully_loaded_user()
+        if user:
+            contextual_data = services.get_measure_context(
+                measure=instance, user=user
+            )
+            context.update(contextual_data)
 
         serializer = self.get_serializer(instance, context=context)
         return Response(serializer.data)
@@ -199,10 +196,18 @@ class MeasureViewSet(viewsets.ModelViewSet):
                 ).data,
                 status=status.HTTP_201_CREATED,
             )
-        except Exception as e:
+        except (MeasureTransitionError, MeasurePermissionError) as e:
             # Catch potential errors from create-and-link
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            # Catch unexpected errors; in future - log for debugging:
+            # logger = logging.getLogger(__name__)
+            # logger.exception(f"Unexpected error creating measure: {e}")
+            return Response(
+                {"error": "An unexpected error occurred - " + str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
     def destroy(self, request, *args, **kwargs):

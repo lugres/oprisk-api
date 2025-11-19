@@ -42,22 +42,6 @@ def _append_to_notes(
     measure.notes = new_note + measure.notes
 
 
-def _get_user_contextual_role(measure: Measure, user: User) -> str:
-    """
-    Maps a user to their role in the context of this measure.
-    This is used by validate_transition.
-    """
-    if user == measure.responsible or user == measure.responsible.manager:
-        return (
-            "Employee"  # 'Employee' and 'Manager' can both do 'Employee' tasks
-        )
-    if user.role and user.role.name == "Risk Officer":
-        return "Risk Officer"
-    if user.role and user.role.name == "Manager":
-        return "Manager"
-    return "Unknown"  # Will fail validation
-
-
 # --- CREATE, DELETE, LINK ---
 
 
@@ -83,20 +67,18 @@ def create_measure(
     )
 
     # Handle the "create-and-link" test case
+    # No need for try/except block as incident_id is pre-validated
+    # by MeasureCreateSerializer.
     if incident_id:
-        try:
-            # If it's an Incident object, use it. If it's an int, get it.
-            if isinstance(incident_id, Incident):
-                incident = incident_id
-            else:
-                incident = Incident.objects.get(id=incident_id)
-            # We can call our other service function here
-            link_measure_to_incident(
-                measure=measure, user=user, incident=incident
-            )
-        except Incident.DoesNotExist:
-            # Fail silently, or raise a validation error if preferred
-            pass
+        # If it's an Incident object, use it. If it's an int, get it.
+        if isinstance(incident_id, Incident):
+            incident = incident_id
+        else:
+            # safe - serializer already validated it exists
+            incident = Incident.objects.get(id=incident_id)
+
+        # We can call our other service function here
+        link_measure_to_incident(measure=measure, user=user, incident=incident)
 
     return measure
 
@@ -207,7 +189,7 @@ def start_progress(*, measure: Measure, user: User) -> Measure:
     Moves a measure from OPEN to IN_PROGRESS.
     Permission: Responsible user or their Manager.
     """
-    role = _get_user_contextual_role(measure, user)
+    role = get_contextual_role_name(measure, user)
     validate_transition(measure.status.code, "IN_PROGRESS", role)
 
     measure.status = MeasureStatusRef.objects.get(code="IN_PROGRESS")
@@ -223,7 +205,7 @@ def submit_for_review(
     Moves a measure from IN_PROGRESS to PENDING_REVIEW.
     Permission: Responsible user or their Manager.
     """
-    role = _get_user_contextual_role(measure, user)
+    role = get_contextual_role_name(measure, user)
     validate_transition(measure.status.code, "PENDING_REVIEW", role)
 
     measure.status = MeasureStatusRef.objects.get(code="PENDING_REVIEW")
@@ -240,7 +222,7 @@ def return_to_progress(
     Moves a measure from PENDING_REVIEW back to IN_PROGRESS.
     Permission: Risk Officer only.
     """
-    role = _get_user_contextual_role(measure, user)
+    role = get_contextual_role_name(measure, user)
     validate_transition(measure.status.code, "IN_PROGRESS", role)
 
     measure.status = MeasureStatusRef.objects.get(code="IN_PROGRESS")
@@ -260,7 +242,7 @@ def complete(
     Moves a measure from PENDING_REVIEW to COMPLETED.
     Permission: Risk Officer only.
     """
-    role = _get_user_contextual_role(measure, user)
+    role = get_contextual_role_name(measure, user)
     validate_transition(measure.status.code, "COMPLETED", role)
 
     measure.status = MeasureStatusRef.objects.get(code="COMPLETED")
@@ -279,7 +261,7 @@ def cancel(*, measure: Measure, user: User, reason: str) -> Measure:
     Permission: Risk Officer only.
     """
 
-    role = _get_user_contextual_role(measure, user)
+    role = get_contextual_role_name(measure, user)
     validate_transition(measure.status.code, "CANCELLED", role)
 
     measure.status = MeasureStatusRef.objects.get(code="CANCELLED")

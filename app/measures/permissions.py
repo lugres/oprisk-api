@@ -70,8 +70,6 @@ class IsCreatorOrManagerForDelete(permissions.BasePermission):
     """
 
     def has_object_permission(self, request, view, obj):
-        if not obj.created_by:
-            return False
 
         # Added Risk Officer based on
         # test_delete_open_measure_as_manager_succeeds
