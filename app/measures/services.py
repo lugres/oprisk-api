@@ -15,6 +15,8 @@ from .workflows import (
     get_available_transitions,
     get_user_permissions,
     get_contextual_role_name,
+    can_user_delete_measure,
+    can_user_add_comment,
 )
 from incidents.models import Incident, IncidentMeasure
 
@@ -42,6 +44,41 @@ def _append_to_notes(
     measure.notes = new_note + measure.notes
 
 
+# --- CONTEXTUAL DATA SERVICE (for retrieve()) ---
+
+
+def get_measure_context(measure: Measure, user: User) -> dict:
+    """
+    [APPLICATION SERVICE]
+    Gathers all contextual data for the MeasureDetailSerializer.
+    This is the single source of truth for this logic.
+    """
+    # 1. Get contextual role (called ONCE)
+    contextual_role_name = get_contextual_role_name(measure, user)
+
+    # 2. Get available transitions (called ONCE)
+    available_transitions = get_available_transitions(
+        measure.status.code, contextual_role_name
+    )
+
+    # 3. Get editable fields (DB query, belongs in service layer)
+    editable_fields = set(
+        MeasureEditableField.objects.filter(
+            status=measure.status, role=user.role
+        ).values_list("field_name", flat=True)
+    )
+
+    # 4. Get fine-grained permissions (pass transitions in)
+    permissions = get_user_permissions(
+        measure, user, editable_fields, available_transitions
+    )
+
+    return {
+        "available_transitions": available_transitions,
+        "permissions": permissions,
+    }
+
+
 # --- CREATE, DELETE, LINK ---
 
 
@@ -59,6 +96,13 @@ def create_measure(
     The 'created_by' is set to the request user.
     The default status is set to 'OPEN' by the model's save() method.
     """
+    # Check creation permission first
+
+    # if not user.role or user.role.name not in ("Manager", "Risk Officer"):
+    #     raise MeasurePermissionError(
+    #         "Only users with the Manager or Risk Officer role can create measures."
+    #     )
+
     measure = Measure.objects.create(
         description=description,
         responsible=responsible,
@@ -90,23 +134,13 @@ def delete_measure(*, measure: Measure, user: User):
     Service to delete a measure, enforcing business rules.
     Permission: Creator/Manager AND status must be OPEN.
     """
-    # 1. Permission Check
-    perm_check = measure.created_by and (
-        user == measure.created_by or user == measure.created_by.manager
-    )
-    if not perm_check:
+    # 1. Permission & Status check by calling pure func from Domain
+    if not can_user_delete_measure(measure, user):
         raise MeasurePermissionError(
             "You do not have permission to delete this measure."
         )
 
-    # 2. Business Rule (Domain) Check
-    if measure.status.code != "OPEN":
-        raise MeasureTransitionError(
-            "Only OPEN measures can be deleted. "
-            "Use 'cancel' for other statuses."
-        )
-
-    # 3. Execution
+    # 2. Execution
     measure.delete()
 
 
@@ -156,28 +190,12 @@ def unlink_measure_from_incident(
 @transaction.atomic
 def add_comment(*, measure: Measure, user: User, comment: str) -> Measure:
     """Appends a comment to the measure's notes."""
-    # No transition validation needed, just a permission check
-    is_participant = (
-        (
-            measure.responsible
-            and (
-                user == measure.responsible
-                or user == measure.responsible.manager
-            )
-        )
-        or (
-            measure.created_by
-            and (
-                user == measure.created_by
-                or user == measure.created_by.manager
-            )
-        )
-        or (user.role and user.role.name == "Risk Officer")
-    )
-    if not is_participant:
+    # No transition validation needed, just a permission check by Domain
+    if not can_user_add_comment(measure, user):
         raise MeasurePermissionError(
             "You do not have permission to comment on this measure."
         )
+
     _append_to_notes(measure, user, "COMMENT", comment)
     measure.save(update_fields=["notes"])
     return measure
@@ -222,6 +240,13 @@ def return_to_progress(
     Moves a measure from PENDING_REVIEW back to IN_PROGRESS.
     Permission: Risk Officer only.
     """
+    # Check permission FIRST - only Risk Officer can do this
+    if not user.role or user.role.name != "Risk Officer":
+        raise MeasurePermissionError(
+            "Only Risk Officers can return measures to progress."
+        )
+
+    # Then validate the state transition
     role = get_contextual_role_name(measure, user)
     validate_transition(measure.status.code, "IN_PROGRESS", role)
 
@@ -242,6 +267,11 @@ def complete(
     Moves a measure from PENDING_REVIEW to COMPLETED.
     Permission: Risk Officer only.
     """
+    if not user.role or user.role.name != "Risk Officer":
+        raise MeasurePermissionError(
+            "Only Risk Officers can complete measures."
+        )
+
     role = get_contextual_role_name(measure, user)
     validate_transition(measure.status.code, "COMPLETED", role)
 
@@ -260,6 +290,8 @@ def cancel(*, measure: Measure, user: User, reason: str) -> Measure:
     Moves a measure to CANCELLED.
     Permission: Risk Officer only.
     """
+    if not user.role or user.role.name != "Risk Officer":
+        raise MeasurePermissionError("Only Risk Officers can cancel measures.")
 
     role = get_contextual_role_name(measure, user)
     validate_transition(measure.status.code, "CANCELLED", role)
@@ -269,38 +301,3 @@ def cancel(*, measure: Measure, user: User, reason: str) -> Measure:
     _append_to_notes(measure, user, "REASON FOR CANCELLATION", reason)
     measure.save(update_fields=["status", "notes", "closed_at", "updated_at"])
     return measure
-
-
-# --- CONTEXTUAL DATA SERVICE (for retrieve()) ---
-
-
-def get_measure_context(measure: Measure, user: User) -> dict:
-    """
-    [APPLICATION SERVICE]
-    Gathers all contextual data for the MeasureDetailSerializer.
-    This is the single source of truth for this logic.
-    """
-    # 1. Get contextual role (called ONCE)
-    contextual_role_name = get_contextual_role_name(measure, user)
-
-    # 2. Get available transitions (called ONCE)
-    available_transitions = get_available_transitions(
-        measure.status.code, contextual_role_name
-    )
-
-    # 3. Get editable fields (DB query, belongs in service layer)
-    editable_fields = set(
-        MeasureEditableField.objects.filter(
-            status=measure.status, role=user.role
-        ).values_list("field_name", flat=True)
-    )
-
-    # 4. Get fine-grained permissions (pass transitions in)
-    permissions = get_user_permissions(
-        measure, user, editable_fields, available_transitions
-    )
-
-    return {
-        "available_transitions": available_transitions,
-        "permissions": permissions,
-    }

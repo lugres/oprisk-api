@@ -179,3 +179,36 @@ def get_user_permissions(
         "can_delete": can_delete,
         "can_transition": can_transition,
     }
+
+
+def can_user_delete_measure(measure, user) -> bool:
+    """[PURE DOMAIN] Checks if a user has permission to delete the measure."""
+    is_creator_or_mgr = measure.created_by and (
+        user.id == measure.created_by.id
+        or (
+            measure.created_by.manager
+            and user.id == measure.created_by.manager.id
+        )
+    )
+    return measure.status.code == "OPEN" and is_creator_or_mgr
+
+
+def can_user_add_comment(measure, user) -> bool:
+    """[PURE DOMAIN] Checks if a user is a participant who can comment."""
+    is_responsible_party = measure.responsible and (
+        user.id == measure.responsible.id
+        or (
+            measure.responsible.manager
+            and user.id == measure.responsible.manager.id
+        )
+    )
+    is_creator_party = measure.created_by and (
+        user.id == measure.created_by.id
+        or (
+            measure.created_by.manager
+            and user.id == measure.created_by.manager.id
+        )
+    )
+    is_risk_officer = user.role and user.role.name == "Risk Officer"
+
+    return is_responsible_party or is_creator_party or is_risk_officer

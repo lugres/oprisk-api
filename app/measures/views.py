@@ -196,11 +196,14 @@ class MeasureViewSet(viewsets.ModelViewSet):
                 ).data,
                 status=status.HTTP_201_CREATED,
             )
-        except (MeasureTransitionError, MeasurePermissionError) as e:
+        except (MeasurePermissionError, MeasureTransitionError) as e:
             # Catch potential errors from create-and-link
-            return Response(
-                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            err_status = (
+                status.HTTP_403_FORBIDDEN
+                if isinstance(e, MeasurePermissionError)
+                else status.HTTP_400_BAD_REQUEST
             )
+            return Response({"error": str(e)}, status=err_status)
         except Exception as e:
             # Catch unexpected errors; in future - log for debugging:
             # logger = logging.getLogger(__name__)
@@ -228,11 +231,7 @@ class MeasureViewSet(viewsets.ModelViewSet):
             )
             return Response({"error": str(e)}, status=err_status)
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsMeasureResponsibleOrManager],
-    )
+    @action(detail=True, methods=["post"])
     def start_progress(self, request, pk=None):
         """
         Action to move a measure from OPEN to IN_PROGRESS.
@@ -254,11 +253,7 @@ class MeasureViewSet(viewsets.ModelViewSet):
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsMeasureResponsibleOrManager],
-    )
+    @action(detail=True, methods=["post"])
     def submit_for_review(self, request, pk=None):
         """
         Action to move a measure from IN_PROGRESS to PENDING_REVIEW.
@@ -282,11 +277,7 @@ class MeasureViewSet(viewsets.ModelViewSet):
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsRoleRiskOfficer],
-    )
+    @action(detail=True, methods=["post"])
     def return_to_progress(self, request, pk=None):
         """
         Action to return a measure from PENDING_REVIEW back to IN_PROGRESS.
@@ -305,16 +296,16 @@ class MeasureViewSet(viewsets.ModelViewSet):
                 ).data,
                 status=status.HTTP_200_OK,
             )
-        except (MeasureTransitionError, MeasurePermissionError) as e:
-            return Response(
-                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+        except (MeasurePermissionError, MeasureTransitionError) as e:
+            # Catch potential errors from create-and-link
+            err_status = (
+                status.HTTP_403_FORBIDDEN
+                if isinstance(e, MeasurePermissionError)
+                else status.HTTP_400_BAD_REQUEST
             )
+            return Response({"error": str(e)}, status=err_status)
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsRoleRiskOfficer],
-    )
+    @action(detail=True, methods=["post"])
     def complete(self, request, pk=None):
         """
         Action to move a measure from PENDING_REVIEW to COMPLETED.
@@ -338,11 +329,7 @@ class MeasureViewSet(viewsets.ModelViewSet):
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsRoleRiskOfficer],
-    )
+    @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
         """
         Action to move a measure to CANCELLED.
@@ -366,11 +353,7 @@ class MeasureViewSet(viewsets.ModelViewSet):
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsMeasureParticipant],
-    )
+    @action(detail=True, methods=["post"])
     def add_comment(self, request, pk=None):
         """Action to add an ad-hoc comment for a measure in progress."""
         measure = self.get_object()
@@ -391,11 +374,7 @@ class MeasureViewSet(viewsets.ModelViewSet):
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsMeasureParticipant],
-    )
+    @action(detail=True, methods=["post"])
     def link_to_incident(self, request, pk=None):
         """An action to link a measure to an incident."""
         measure = self.get_object()
@@ -413,11 +392,7 @@ class MeasureViewSet(viewsets.ModelViewSet):
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsMeasureParticipant],
-    )
+    @action(detail=True, methods=["post"])
     def unlink_from_incident(self, request, pk=None):
         """An action to link a measure to an incident."""
         measure = self.get_object()

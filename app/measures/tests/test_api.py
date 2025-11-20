@@ -311,7 +311,7 @@ class MeasureCRUDTests(MeasureTestBase):
         url = measure_detail_url(self.measure_in_progress.id)
         res = self.client.delete(url)
 
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
         self.assertTrue(
             Measure.objects.filter(id=self.measure_in_progress.id).exists()
         )
