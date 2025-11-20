@@ -17,6 +17,7 @@ from .workflows import (
     get_contextual_role_name,
     can_user_delete_measure,
     can_user_add_comment,
+    can_user_create_measure,
 )
 from incidents.models import Incident, IncidentMeasure
 
@@ -25,7 +26,6 @@ User = get_user_model()
 # --- HELPER FUNCTIONS ---
 
 
-# --- moved from workflow.py ---
 def _append_to_notes(
     measure: Measure, user: User, note_prefix: str, content: str
 ):
@@ -93,15 +93,32 @@ def create_measure(
 ) -> Measure:
     """
     Creates a new measure.
+
+    Permission: Manager or Risk Officer only.
     The 'created_by' is set to the request user.
     The default status is set to 'OPEN' by the model's save() method.
-    """
-    # Check creation permission first
 
-    # if not user.role or user.role.name not in ("Manager", "Risk Officer"):
-    #     raise MeasurePermissionError(
-    #         "Only users with the Manager or Risk Officer role can create measures."
-    #     )
+    Args:
+        user: User creating the measure
+        description: Measure description
+        responsible: User responsible for the measure
+        deadline: Optional deadline
+        incident_id: Optional incident to link (int or Incident object)
+
+    Returns:
+        Created Measure instance
+
+    Raises:
+        MeasurePermissionError: User lacks permission to create measures
+        MeasureTransitionError: Error during incident linking
+    """
+
+    # Enforce creation permission via domain function
+    if not can_user_create_measure(user):
+        raise MeasurePermissionError(
+            "Only users with the Manager or Risk Officer role"
+            " can create measures."
+        )
 
     measure = Measure.objects.create(
         description=description,

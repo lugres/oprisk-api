@@ -15,11 +15,6 @@ from .models import Measure
 from . import serializers
 from . import services
 from .workflows import MeasureTransitionError, MeasurePermissionError
-from .permissions import (
-    IsMeasureResponsibleOrManager,
-    IsMeasureParticipant,
-)
-from incidents.permissions import IsRoleRiskOfficer
 
 from .filters import MeasureFilter
 
@@ -172,16 +167,13 @@ class MeasureViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         """
         Create a new measure.
-        Permission: Manager or Risk Officer only.
+        Permission: Manager or Risk Officer only (enforced in services).
+
+        Returns:
+        201 Created: Measure created successfully
+        400 Bad Request: Invalid data or transition error
+        403 Forbidden: User lacks permission to create measures
         """
-        if not (
-            request.user.role.name == "Manager"
-            or request.user.role.name == "Risk Officer"
-        ):
-            return Response(
-                {"error": "You do not have permission to create measures."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -197,7 +189,7 @@ class MeasureViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_201_CREATED,
             )
         except (MeasurePermissionError, MeasureTransitionError) as e:
-            # Catch potential errors from create-and-link
+            # Catch potential errors - permission or create-and-link
             err_status = (
                 status.HTTP_403_FORBIDDEN
                 if isinstance(e, MeasurePermissionError)

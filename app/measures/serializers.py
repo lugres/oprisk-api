@@ -178,7 +178,8 @@ class MeasureUpdateSerializer(serializers.ModelSerializer):
         ]  # All fields a user *might* edit
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)  # This sets self.instance
+        # This sets self.instance
+        super().__init__(*args, **kwargs)
 
         # get user from the request in context
         request = self.context.get("request")

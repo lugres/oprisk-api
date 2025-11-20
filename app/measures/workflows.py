@@ -1,5 +1,5 @@
 """
-Domain layer - pure, Django-unaware, state machine for measures.
+Domain layer: pure, Django-unaware state machine for measures.
 Validates measure transitions as prescribed by business rules.
 """
 
@@ -179,6 +179,22 @@ def get_user_permissions(
         "can_delete": can_delete,
         "can_transition": can_transition,
     }
+
+
+# --- 3. User Permissions, helper funcs (Logic moved from Views) ---
+
+
+def can_user_create_measure(user) -> bool:
+    """
+    [PURE DOMAIN] Only Managers and Risk Officers can create measures.
+
+    Args:
+        user: User attempting to create a measure
+
+    Returns:
+        bool: True if user can create measures, False otherwise
+    """
+    return user.role and user.role.name in ("Manager", "Risk Officer")
 
 
 def can_user_delete_measure(measure, user) -> bool:

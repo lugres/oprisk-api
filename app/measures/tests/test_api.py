@@ -271,10 +271,20 @@ class MeasureCRUDTests(MeasureTestBase):
     def test_create_measure_as_employee_fails(self):
         """Test a regular Employee cannot create a new measure."""
         self.client.force_authenticate(user=self.responsible_user)
-        payload = {"description": "This should fail"}
+
+        # Provide valid payload to pass serializer validation
+        # This tests PERMISSION logic, not validation logic
+        payload = {
+            "description": "This should fail - employee has no perms",
+            "responsible": self.responsible_user.id,
+            "deadline": date.today() + timedelta(days=15),
+        }
+
         res = self.client.post(measure_list_url(), payload)
 
+        # Should fail with 403 Forbidden (not 400 Bad Request)
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Manager or Risk Officer", str(res.data["error"]))
 
     def test_unauthenticated_cannot_create_measure(self):
         """Test unauthenticated user cannot create measures."""
