@@ -2,7 +2,6 @@
 Views for the measures APIs.
 """
 
-from django.db.models import Q
 from django.contrib.auth import get_user_model
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -78,40 +77,10 @@ class MeasureViewSet(viewsets.ModelViewSet):
             )
         )
 
-        # 3. Apply role-based filtering
-        if not user.role:
-            return queryset.none()
+        # 3. Apply role-based filtering from service layer
+        visibility_filter = services.get_measure_visibility_filter(user)
 
-        if user.role.name == "Risk Officer":
-            # Risk Officers see all in their BU
-            return (
-                queryset.filter(
-                    Q(responsible__business_unit=user.business_unit)
-                    | Q(created_by__business_unit=user.business_unit)
-                )
-                .distinct()
-                .order_by("-id")
-            )
-
-        if user.role.name == "Manager":
-            # Manager sees their own, their reports'
-            return (
-                queryset.filter(
-                    Q(responsible=user)
-                    | Q(created_by=user)
-                    | Q(responsible__manager=user)
-                    | Q(created_by__manager=user)
-                )
-                .distinct()
-                .order_by("-id")
-            )
-
-        # Default: Employee sees their own (responsible or created)
-        return (
-            queryset.filter(Q(responsible=user) | Q(created_by=user))
-            .distinct()
-            .order_by("-id")
-        )
+        return queryset.filter(visibility_filter).distinct().order_by("-id")
 
     def get_serializer_class(self):
         """Return the serializer class for request based on action."""

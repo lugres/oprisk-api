@@ -5,6 +5,7 @@ Enforces business rules.
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from .models import Measure, MeasureStatusRef, MeasureEditableField
 
@@ -77,6 +78,49 @@ def get_measure_context(measure: Measure, user: User) -> dict:
         "available_transitions": available_transitions,
         "permissions": permissions,
     }
+
+
+# --- Query Service for data visibility (for get_queryset()) ---
+# better purity can be achieved by moving into Domain (deferred)
+
+
+def get_measure_visibility_filter(user) -> Q:
+    """
+    Returns a Q filter for measures visible to the given user.
+
+    This is the single source of truth for data visibility rules.
+
+    Business Rules:
+    - Risk Officer: All measures in their business unit
+    - Manager: Own measures + their reports' measures
+    - Employee: Only measures where they are responsible or creator
+
+    Args:
+        user: User requesting the data
+
+    Returns:
+        Q object for filtering, or Q() for no results
+    """
+    if not user or not user.role:
+        return Q(pk__in=[])  # Empty result
+
+    if user.role.name == "Risk Officer":
+        # Risk Officers see all in their BU
+        return Q(responsible__business_unit=user.business_unit) | Q(
+            created_by__business_unit=user.business_unit
+        )
+
+    if user.role.name == "Manager":
+        # Manager sees their own + their reports'
+        return (
+            Q(responsible=user)
+            | Q(created_by=user)
+            | Q(responsible__manager=user)
+            | Q(created_by__manager=user)
+        )
+
+    # Default: Employee sees their own
+    return Q(responsible=user) | Q(created_by=user)
 
 
 # --- CREATE, DELETE, LINK ---
