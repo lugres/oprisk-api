@@ -271,10 +271,20 @@ class MeasureCRUDTests(MeasureTestBase):
     def test_create_measure_as_employee_fails(self):
         """Test a regular Employee cannot create a new measure."""
         self.client.force_authenticate(user=self.responsible_user)
-        payload = {"description": "This should fail"}
+
+        # Provide valid payload to pass serializer validation
+        # This tests PERMISSION logic, not validation logic
+        payload = {
+            "description": "This should fail - employee has no perms",
+            "responsible": self.responsible_user.id,
+            "deadline": date.today() + timedelta(days=15),
+        }
+
         res = self.client.post(measure_list_url(), payload)
 
+        # Should fail with 403 Forbidden (not 400 Bad Request)
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Manager or Risk Officer", str(res.data["error"]))
 
     def test_unauthenticated_cannot_create_measure(self):
         """Test unauthenticated user cannot create measures."""
@@ -311,7 +321,7 @@ class MeasureCRUDTests(MeasureTestBase):
         url = measure_detail_url(self.measure_in_progress.id)
         res = self.client.delete(url)
 
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
         self.assertTrue(
             Measure.objects.filter(id=self.measure_in_progress.id).exists()
         )
@@ -620,7 +630,10 @@ class MeasureWorkflowTests(MeasureTestBase):
         res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Cannot cancel", str(res.data))
+        self.assertIn(
+            "Transition from 'OPEN' to 'CANCELLED' is not defined",
+            str(res.data["error"]),
+        )
 
     def test_evidence_includes_timestamp_and_user(self):
         """Test that evidence submissions are timestamped and attributed."""
@@ -896,6 +909,29 @@ class MeasureValidationTests(MeasureTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("reason", str(res.data))
+
+    def test_create_measure_with_nonexistent_incident_fails(self):
+        """Test creating measure with non-existent incident_id fails."""
+        self.client.force_authenticate(user=self.manager)
+        payload = {
+            "description": "Measure with invalid incident",
+            "responsible": self.responsible_user.id,
+            "deadline": date.today() + timedelta(days=15),
+            "incident_id": 99999,  # Non-existent incident
+        }
+        res = self.client.post(measure_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        # DRF returns field-specific validation errors
+        self.assertIn("incident_id", res.data)
+        self.assertIn("does not exist", str(res.data["incident_id"]))
+
+        # Verify measure was NOT created (transaction rollback)
+        self.assertFalse(
+            Measure.objects.filter(
+                description="Measure with invalid incident"
+            ).exists()
+        )
 
 
 class MeasureFilteringTests(MeasureTestBase):

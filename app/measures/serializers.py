@@ -119,81 +119,12 @@ class MeasureDetailSerializer(serializers.ModelSerializer):
         ).data
 
     def get_available_transitions(self, obj):
-        # Logic to show what actions are possible
-        # This will be based on user permissions from context
-        request = self.context.get("request")
-        if not request:
-            return []
-
-        # This logic can be expanded, but for now:
-        user = request.user
-        transitions = []
-
-        is_responsible_or_mgr = obj.responsible and (
-            user == obj.responsible or user == obj.responsible.manager
-        )
-        is_risk_officer = user.role and user.role.name == "Risk Officer"
-
-        if obj.status.code == "OPEN" and is_responsible_or_mgr:
-            transitions.append(
-                {"action": "start-progress", "name": "Start Progress"}
-            )
-        if obj.status.code == "IN_PROGRESS" and is_responsible_or_mgr:
-            transitions.append(
-                {"action": "submit-for-review", "name": "Submit for Review"}
-            )
-        if obj.status.code == "PENDING_REVIEW" and is_risk_officer:
-            transitions.append(
-                {"action": "return-to-progress", "name": "Return to Progress"}
-            )
-            transitions.append(
-                {"action": "complete", "name": "Complete Measure"}
-            )
-
-        return transitions
+        # Read from context (populated by ViewSet)
+        return self.context.get("available_transitions", [])
 
     def get_permissions(self, obj):
-        # Logic to show what user can do
-        request = self.context.get("request")
-        if not request:
-            return {}
-
-        user = request.user
-
-        can_edit = False
-        can_delete = False
-        # We need to get the editable fields for the *current* user/status
-        editable_fields = set(
-            MeasureEditableField.objects.filter(
-                status=obj.status, role=user.role
-            ).values_list("field_name", flat=True)
-        )
-        # Check if there are any fields they can edit
-        can_edit = any(
-            f in editable_fields
-            for f in ["description", "deadline", "responsible"]
-        )
-
-        is_creator_or_mgr = obj.created_by and (
-            user == obj.created_by or user == obj.created_by.manager
-        )
-        if obj.status.code == "OPEN" and is_creator_or_mgr:
-            can_delete = True
-
-        # can_edit = (
-        #     obj.status.code == "OPEN"
-        #     and (user == obj.responsible or user == obj.created_by)
-        # ) or (
-        #     obj.status.code == "IN_PROGRESS"
-        #     and user.role.name == "Risk Officer"
-        # )
-        # can_delete = obj.status.code == "OPEN" and user == obj.created_by
-
-        return {
-            "can_edit": can_edit,
-            "can_delete": can_delete,
-            "can_transition": bool(self.get_available_transitions(obj)),
-        }
+        # Read from context (populated by ViewSet)
+        return self.context.get("permissions", {})
 
 
 class MeasureCreateSerializer(serializers.ModelSerializer):
@@ -247,7 +178,8 @@ class MeasureUpdateSerializer(serializers.ModelSerializer):
         ]  # All fields a user *might* edit
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)  # This sets self.instance
+        # This sets self.instance
+        super().__init__(*args, **kwargs)
 
         # get user from the request in context
         request = self.context.get("request")

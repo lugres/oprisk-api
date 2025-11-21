@@ -2,7 +2,7 @@
 Views for the measures APIs.
 """
 
-from django.db.models import Q
+from django.contrib.auth import get_user_model
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -14,17 +14,13 @@ from .models import Measure
 from . import serializers
 from . import services
 from .workflows import MeasureTransitionError, MeasurePermissionError
-from .permissions import (
-    IsMeasureResponsibleOrManager,
-    IsMeasureParticipant,
-    IsCreatorOrManagerForDelete,
-)
-from incidents.permissions import IsRoleRiskOfficer
 
 from .filters import MeasureFilter
 
 
 class StandardResultsSetPagination(PageNumberPagination):
+    """Provides pagination for output."""
+
     page_size = 50
     page_size_query_param = "page_size"
     max_page_size = 100
@@ -33,54 +29,58 @@ class StandardResultsSetPagination(PageNumberPagination):
 class MeasureViewSet(viewsets.ModelViewSet):
     """View for managing measures APIs."""
 
-    queryset = Measure.objects.all().select_related(
-        "status", "responsible", "created_by"
-    )
+    queryset = Measure.objects.all()
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
     pagination_class = StandardResultsSetPagination
     filterset_class = MeasureFilter
 
+    def _get_fully_loaded_user(self):
+        """
+        Helper method to get the fully-loaded user object with related data.
+        Returns None if user is not authenticated or doesn't exist.
+        """
+        if not self.request.user.is_authenticated:
+            return None
+
+        try:
+            return (
+                get_user_model()
+                .objects.select_related("role", "manager", "business_unit")
+                .get(id=self.request.user.id)
+            )
+        except get_user_model().DoesNotExist:
+            return None
+
     def get_queryset(self):
         """
         Implement data segregation based on user role.
         """
-        user = self.request.user
-        queryset = super().get_queryset()
+        # 1. Get the fully-loaded user object for filtering.
+        user = self._get_fully_loaded_user()
+        if not user or not user.role:
+            return super().get_queryset().none()
 
-        if not user.role:
-            return queryset.none()  # Failsafe
-
-        if user.role.name == "Risk Officer":
-            # Risk Officers see all in their BU
-            return (
-                queryset.filter(
-                    Q(responsible__business_unit=user.business_unit)
-                    | Q(created_by__business_unit=user.business_unit)
-                )
-                .distinct()
-                .order_by("-id")
+        # 2. Start with the base queryset and pre-fetch all
+        #    Measure-related objects needed for permissions.
+        queryset = (
+            super()
+            .get_queryset()
+            .select_related(
+                "status",
+                "responsible",
+                "responsible__role",
+                "responsible__manager",  # <-- Explicitly pre-fetch manager
+                "created_by",
+                "created_by__role",
+                "created_by__manager",  # <-- Explicitly pre-fetch manager
             )
-
-        if user.role.name == "Manager":
-            # Manager sees their own, their reports'
-            return (
-                queryset.filter(
-                    Q(responsible=user)
-                    | Q(created_by=user)
-                    | Q(responsible__manager=user)
-                    | Q(created_by__manager=user)
-                )
-                .distinct()
-                .order_by("-id")
-            )
-
-        # Default: Employee sees their own (responsible or created)
-        return (
-            queryset.filter(Q(responsible=user) | Q(created_by=user))
-            .distinct()
-            .order_by("-id")
         )
+
+        # 3. Apply role-based filtering from service layer
+        visibility_filter = services.get_measure_visibility_filter(user)
+
+        return queryset.filter(visibility_filter).distinct().order_by("-id")
 
     def get_serializer_class(self):
         """Return the serializer class for request based on action."""
@@ -104,44 +104,75 @@ class MeasureViewSet(viewsets.ModelViewSet):
         return serializers.MeasureDetailSerializer
 
     def get_serializer_context(self):
-        """Pass user role and request into the serializer."""
+        """
+        Pass user role and request into the serializer.
+        For 'retrieve', also pass contextual permissions.
+        """
         context = super().get_serializer_context()
-        context["user_role"] = self.request.user.role
         context["request"] = self.request  # For DetailSerializer
         return context
+
+    # Override retrieve to use the new context logic
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Retrieve a single measure with contextual data.
+        """
+        instance = self.get_object()
+        context = self.get_serializer_context()
+
+        # get fully-loaded user, add its contextual data (perms & trans)
+        user = self._get_fully_loaded_user()
+        if user:
+            contextual_data = services.get_measure_context(
+                measure=instance, user=user
+            )
+            context.update(contextual_data)
+
+        serializer = self.get_serializer(instance, context=context)
+        return Response(serializer.data)
 
     # --- Core CRUD Actions ---
 
     def create(self, request, *args, **kwargs):
         """
         Create a new measure.
-        Permission: Manager or Risk Officer only.
+        Permission: Manager or Risk Officer only (enforced in services).
+
+        Returns:
+        201 Created: Measure created successfully
+        400 Bad Request: Invalid data or transition error
+        403 Forbidden: User lacks permission to create measures
         """
-        if not (
-            request.user.role.name == "Manager"
-            or request.user.role.name == "Risk Officer"
-        ):
-            return Response(
-                {"error": "You do not have permission to create measures."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
 
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        # Use service to create
-        measure = services.create_measure(
-            user=request.user,
-            description=serializer.validated_data["description"],
-            responsible=serializer.validated_data["responsible"],
-            deadline=serializer.validated_data["deadline"],
-            incident_id=serializer.validated_data.get("incident_id"),
-        )
-
-        return Response(
-            serializers.MeasureDetailSerializer(measure).data,
-            status=status.HTTP_201_CREATED,
-        )
+        try:
+            measure = services.create_measure(
+                user=request.user, **serializer.validated_data
+            )
+            return Response(
+                serializers.MeasureDetailSerializer(
+                    measure, context=self.get_serializer_context()
+                ).data,
+                status=status.HTTP_201_CREATED,
+            )
+        except (MeasurePermissionError, MeasureTransitionError) as e:
+            # Catch potential errors - permission or create-and-link
+            err_status = (
+                status.HTTP_403_FORBIDDEN
+                if isinstance(e, MeasurePermissionError)
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response({"error": str(e)}, status=err_status)
+        except Exception as e:
+            # Catch unexpected errors; in future - log for debugging:
+            # logger = logging.getLogger(__name__)
+            # logger.exception(f"Unexpected error creating measure: {e}")
+            return Response(
+                {"error": "An unexpected error occurred - " + str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     def destroy(self, request, *args, **kwargs):
         """
@@ -151,25 +182,9 @@ class MeasureViewSet(viewsets.ModelViewSet):
         measure = self.get_object()
 
         try:
-            # Check permissions
-            perm_check = IsCreatorOrManagerForDelete()
-            if not perm_check.has_object_permission(request, self, measure):
-                raise MeasurePermissionError(
-                    "You do not have permission to delete this measure."
-                )
-
-            # Check status (Business Rule)
-            if measure.status.code != "OPEN":
-                raise MeasureTransitionError(
-                    "Only OPEN measures can be deleted. "
-                    "Use 'cancel' for other statuses."
-                )
-
-            measure.delete()
+            services.delete_measure(measure=measure, user=request.user)
             return Response(status=status.HTTP_204_NO_CONTENT)
-
         except (MeasureTransitionError, MeasurePermissionError) as e:
-            # Return 403 for permission errors, 400 for business logic errors
             err_status = (
                 status.HTTP_403_FORBIDDEN
                 if isinstance(e, MeasurePermissionError)
@@ -177,120 +192,181 @@ class MeasureViewSet(viewsets.ModelViewSet):
             )
             return Response({"error": str(e)}, status=err_status)
 
-        # return super().destroy(request, *args, **kwargs)
-
-    # --- Workflow Actions ---
-
-    def _handle_workflow_action(self, request, service_func, *args, **kwargs):
-        """Generic helper for workflow actions."""
+    @action(detail=True, methods=["post"])
+    def start_progress(self, request, pk=None):
+        """
+        Action to move a measure from OPEN to IN_PROGRESS.
+        Permission: Responsible user or their Manager.
+        """
         measure = self.get_object()
         try:
-            updated_measure = service_func(
-                measure=measure, user=request.user, **kwargs
+            updated_measure = services.start_progress(
+                measure=measure, user=request.user
             )
             return Response(
-                serializers.MeasureDetailSerializer(updated_measure).data,
+                serializers.MeasureDetailSerializer(
+                    updated_measure, context=self.get_serializer_context()
+                ).data,
                 status=status.HTTP_200_OK,
             )
         except (MeasureTransitionError, MeasurePermissionError) as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
-        except serializers.ValidationError as e:
-            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsMeasureResponsibleOrManager],
-    )
-    def start_progress(self, request, pk=None):
-        return self._handle_workflow_action(request, services.start_progress)
-
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsMeasureResponsibleOrManager],
-    )
+    @action(detail=True, methods=["post"])
     def submit_for_review(self, request, pk=None):
+        """
+        Action to move a measure from IN_PROGRESS to PENDING_REVIEW.
+        Permission: Responsible user or their Manager.
+        """
+        measure = self.get_object()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return self._handle_workflow_action(
-            request, services.submit_for_review, **serializer.validated_data
-        )
+        try:
+            updated_measure = services.submit_for_review(
+                measure=measure, user=request.user, **serializer.validated_data
+            )
+            return Response(
+                serializers.MeasureDetailSerializer(
+                    updated_measure, context=self.get_serializer_context()
+                ).data,
+                status=status.HTTP_200_OK,
+            )
+        except (MeasureTransitionError, MeasurePermissionError) as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsRoleRiskOfficer],
-    )
+    @action(detail=True, methods=["post"])
     def return_to_progress(self, request, pk=None):
+        """
+        Action to return a measure from PENDING_REVIEW back to IN_PROGRESS.
+        Permission: Risk Officer only. Reason is required.
+        """
+        measure = self.get_object()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return self._handle_workflow_action(
-            request, services.return_to_progress, **serializer.validated_data
-        )
+        try:
+            updated_measure = services.return_to_progress(
+                measure=measure, user=request.user, **serializer.validated_data
+            )
+            return Response(
+                serializers.MeasureDetailSerializer(
+                    updated_measure, context=self.get_serializer_context()
+                ).data,
+                status=status.HTTP_200_OK,
+            )
+        except (MeasurePermissionError, MeasureTransitionError) as e:
+            # Catch potential errors from create-and-link
+            err_status = (
+                status.HTTP_403_FORBIDDEN
+                if isinstance(e, MeasurePermissionError)
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response({"error": str(e)}, status=err_status)
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsRoleRiskOfficer],
-    )
+    @action(detail=True, methods=["post"])
     def complete(self, request, pk=None):
+        """
+        Action to move a measure from PENDING_REVIEW to COMPLETED.
+        Permission: Risk Officer only. Closure comment is required.
+        """
+        measure = self.get_object()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return self._handle_workflow_action(
-            request, services.complete, **serializer.validated_data
-        )
+        try:
+            updated_measure = services.complete(
+                measure=measure, user=request.user, **serializer.validated_data
+            )
+            return Response(
+                serializers.MeasureDetailSerializer(
+                    updated_measure, context=self.get_serializer_context()
+                ).data,
+                status=status.HTTP_200_OK,
+            )
+        except (MeasureTransitionError, MeasurePermissionError) as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsRoleRiskOfficer],
-    )
+    @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
+        """
+        Action to move a measure to CANCELLED.
+        Permission: Risk Officer only. Reason is required.
+        """
+        measure = self.get_object()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return self._handle_workflow_action(
-            request, services.cancel, **serializer.validated_data
-        )
+        try:
+            updated_measure = services.cancel(
+                measure=measure, user=request.user, **serializer.validated_data
+            )
+            return Response(
+                serializers.MeasureDetailSerializer(
+                    updated_measure, context=self.get_serializer_context()
+                ).data,
+                status=status.HTTP_200_OK,
+            )
+        except (MeasureTransitionError, MeasurePermissionError) as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsMeasureParticipant],
-    )
+    @action(detail=True, methods=["post"])
     def add_comment(self, request, pk=None):
+        """Action to add an ad-hoc comment for a measure in progress."""
+        measure = self.get_object()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return self._handle_workflow_action(
-            request, services.add_comment, **serializer.validated_data
-        )
+        try:
+            updated_measure = services.add_comment(
+                measure=measure, user=request.user, **serializer.validated_data
+            )
+            return Response(
+                serializers.MeasureDetailSerializer(
+                    updated_measure, context=self.get_serializer_context()
+                ).data,
+                status=status.HTTP_200_OK,
+            )
+        except (MeasureTransitionError, MeasurePermissionError) as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsMeasureParticipant],
-    )
+    @action(detail=True, methods=["post"])
     def link_to_incident(self, request, pk=None):
+        """An action to link a measure to an incident."""
+        measure = self.get_object()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return self._handle_workflow_action(
-            request,
-            services.link_measure_to_incident,
-            incident=serializer.validated_data["incident_id"],
-        )
+        try:
+            services.link_measure_to_incident(
+                measure=measure,
+                user=request.user,
+                incident=serializer.validated_data["incident_id"],
+            )
+            return Response({"status": "linked"}, status=status.HTTP_200_OK)
+        except (MeasureTransitionError, MeasurePermissionError) as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
 
-    @action(
-        detail=True,
-        methods=["post"],
-        permission_classes=[IsAuthenticated, IsMeasureParticipant],
-    )
+    @action(detail=True, methods=["post"])
     def unlink_from_incident(self, request, pk=None):
+        """An action to link a measure to an incident."""
+        measure = self.get_object()
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return self._handle_workflow_action(
-            request,
-            services.unlink_measure_from_incident,
-            incident=serializer.validated_data["incident_id"],
-        )
+        try:
+            services.unlink_measure_from_incident(
+                measure=measure,
+                user=request.user,
+                incident=serializer.validated_data["incident_id"],
+            )
+            return Response({"status": "unlinked"}, status=status.HTTP_200_OK)
+        except (MeasureTransitionError, MeasurePermissionError) as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )

@@ -5,20 +5,125 @@ Enforces business rules.
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
-from .models import Measure, MeasureStatusRef
+from .models import Measure, MeasureStatusRef, MeasureEditableField
 
 from .workflows import (
     MeasureTransitionError,
     MeasurePermissionError,
-    append_to_notes,
+    validate_transition,
+    get_available_transitions,
+    get_user_permissions,
+    get_contextual_role_name,
+    can_user_delete_measure,
+    can_user_add_comment,
+    can_user_create_measure,
 )
 from incidents.models import Incident, IncidentMeasure
 
 User = get_user_model()
 
+# --- HELPER FUNCTIONS ---
 
-# --- CREATE & LINK ---
+
+def _append_to_notes(
+    measure: Measure, user: User, note_prefix: str, content: str
+):
+    """
+    Appends a new, timestamped entry to the measure's 'notes' field.
+    e.g., [2025-11-14 09:30 - user@example.com - EVIDENCE]:
+    Submitted for review.
+    """
+    timestamp = timezone.now().strftime("%Y-%m-%d %H:%M")
+    new_note = (
+        f"[{timestamp} - {user.email} - {note_prefix}]:\n"
+        f"{content}\n"
+        f"{'-' * 20}\n"
+    )
+    # Prepend new notes to the top
+    measure.notes = new_note + measure.notes
+
+
+# --- CONTEXTUAL DATA SERVICE (for retrieve()) ---
+
+
+def get_measure_context(measure: Measure, user: User) -> dict:
+    """
+    [APPLICATION SERVICE]
+    Gathers all contextual data for the MeasureDetailSerializer.
+    This is the single source of truth for this logic.
+    """
+    # 1. Get contextual role (called ONCE)
+    contextual_role_name = get_contextual_role_name(measure, user)
+
+    # 2. Get available transitions (called ONCE)
+    available_transitions = get_available_transitions(
+        measure.status.code, contextual_role_name
+    )
+
+    # 3. Get editable fields (DB query, belongs in service layer)
+    editable_fields = set(
+        MeasureEditableField.objects.filter(
+            status=measure.status, role=user.role
+        ).values_list("field_name", flat=True)
+    )
+
+    # 4. Get fine-grained permissions (pass transitions in)
+    permissions = get_user_permissions(
+        measure, user, editable_fields, available_transitions
+    )
+
+    return {
+        "available_transitions": available_transitions,
+        "permissions": permissions,
+    }
+
+
+# --- Query Service for data visibility (for get_queryset()) ---
+# better purity can be achieved by moving into Domain (deferred)
+
+
+def get_measure_visibility_filter(user) -> Q:
+    """
+    Returns a Q filter for measures visible to the given user.
+
+    This is the single source of truth for data visibility rules.
+
+    Business Rules:
+    - Risk Officer: All measures in their business unit
+    - Manager: Own measures + their reports' measures
+    - Employee: Only measures where they are responsible or creator
+
+    Args:
+        user: User requesting the data
+
+    Returns:
+        Q object for filtering, or Q() for no results
+    """
+    if not user or not user.role:
+        return Q(pk__in=[])  # Empty result
+
+    if user.role.name == "Risk Officer":
+        # Risk Officers see all in their BU
+        return Q(responsible__business_unit=user.business_unit) | Q(
+            created_by__business_unit=user.business_unit
+        )
+
+    if user.role.name == "Manager":
+        # Manager sees their own + their reports'
+        return (
+            Q(responsible=user)
+            | Q(created_by=user)
+            | Q(responsible__manager=user)
+            | Q(created_by__manager=user)
+        )
+
+    # Default: Employee sees their own
+    return Q(responsible=user) | Q(created_by=user)
+
+
+# --- CREATE, DELETE, LINK ---
 
 
 @transaction.atomic
@@ -32,9 +137,33 @@ def create_measure(
 ) -> Measure:
     """
     Creates a new measure.
+
+    Permission: Manager or Risk Officer only.
     The 'created_by' is set to the request user.
     The default status is set to 'OPEN' by the model's save() method.
+
+    Args:
+        user: User creating the measure
+        description: Measure description
+        responsible: User responsible for the measure
+        deadline: Optional deadline
+        incident_id: Optional incident to link (int or Incident object)
+
+    Returns:
+        Created Measure instance
+
+    Raises:
+        MeasurePermissionError: User lacks permission to create measures
+        MeasureTransitionError: Error during incident linking
     """
+
+    # Enforce creation permission via domain function
+    if not can_user_create_measure(user):
+        raise MeasurePermissionError(
+            "Only users with the Manager or Risk Officer role"
+            " can create measures."
+        )
+
     measure = Measure.objects.create(
         description=description,
         responsible=responsible,
@@ -43,22 +172,37 @@ def create_measure(
     )
 
     # Handle the "create-and-link" test case
+    # No need for try/except block as incident_id is pre-validated
+    # by MeasureCreateSerializer.
     if incident_id:
-        try:
-            # If it's an Incident object, use it. If it's an int, get it.
-            if isinstance(incident_id, Incident):
-                incident = incident_id
-            else:
-                incident = Incident.objects.get(id=incident_id)
-            # We can call our other service function here
-            link_measure_to_incident(
-                measure=measure, user=user, incident=incident
-            )
-        except Incident.DoesNotExist:
-            # Fail silently, or raise a validation error if preferred
-            pass
+        # If it's an Incident object, use it. If it's an int, get it.
+        if isinstance(incident_id, Incident):
+            incident = incident_id
+        else:
+            # safe - serializer already validated it exists
+            incident = Incident.objects.get(id=incident_id)
+
+        # We can call our other service function here
+        link_measure_to_incident(measure=measure, user=user, incident=incident)
 
     return measure
+
+
+# moved from the ViewSet
+@transaction.atomic
+def delete_measure(*, measure: Measure, user: User):
+    """
+    Service to delete a measure, enforcing business rules.
+    Permission: Creator/Manager AND status must be OPEN.
+    """
+    # 1. Permission & Status check by calling pure func from Domain
+    if not can_user_delete_measure(measure, user):
+        raise MeasurePermissionError(
+            "You do not have permission to delete this measure."
+        )
+
+    # 2. Execution
+    measure.delete()
 
 
 @transaction.atomic
@@ -107,7 +251,13 @@ def unlink_measure_from_incident(
 @transaction.atomic
 def add_comment(*, measure: Measure, user: User, comment: str) -> Measure:
     """Appends a comment to the measure's notes."""
-    append_to_notes(measure, user, "COMMENT", comment)
+    # No transition validation needed, just a permission check by Domain
+    if not can_user_add_comment(measure, user):
+        raise MeasurePermissionError(
+            "You do not have permission to comment on this measure."
+        )
+
+    _append_to_notes(measure, user, "COMMENT", comment)
     measure.save(update_fields=["notes"])
     return measure
 
@@ -118,19 +268,8 @@ def start_progress(*, measure: Measure, user: User) -> Measure:
     Moves a measure from OPEN to IN_PROGRESS.
     Permission: Responsible user or their Manager.
     """
-    # Test for: test_start_progress_fails_if_already_in_progress
-    if measure.status.code != "OPEN":
-        raise MeasureTransitionError(
-            "Measure must be in OPEN status to start."
-        )
-
-    # Permission check (from tests)
-    if not (
-        user == measure.responsible or user == measure.responsible.manager
-    ):
-        raise MeasurePermissionError(
-            "Only the responsible user or their manager can start progress."
-        )
+    role = get_contextual_role_name(measure, user)
+    validate_transition(measure.status.code, "IN_PROGRESS", role)
 
     measure.status = MeasureStatusRef.objects.get(code="IN_PROGRESS")
     measure.save(update_fields=["status", "updated_at"])
@@ -145,22 +284,11 @@ def submit_for_review(
     Moves a measure from IN_PROGRESS to PENDING_REVIEW.
     Permission: Responsible user or their Manager.
     """
-    # Test for: test_submit_for_review_fails_from_open
-    if measure.status.code != "IN_PROGRESS":
-        raise MeasureTransitionError(
-            "Measure must be IN_PROGRESS to submit for review."
-        )
-
-    # Permission check (from tests)
-    if not (
-        user == measure.responsible or user == measure.responsible.manager
-    ):
-        raise MeasurePermissionError(
-            "Only the responsible user or their manager can submit for review."
-        )
+    role = get_contextual_role_name(measure, user)
+    validate_transition(measure.status.code, "PENDING_REVIEW", role)
 
     measure.status = MeasureStatusRef.objects.get(code="PENDING_REVIEW")
-    append_to_notes(measure, user, "EVIDENCE", evidence)
+    _append_to_notes(measure, user, "EVIDENCE", evidence)
     measure.save(update_fields=["status", "notes", "updated_at"])
     return measure
 
@@ -173,20 +301,18 @@ def return_to_progress(
     Moves a measure from PENDING_REVIEW back to IN_PROGRESS.
     Permission: Risk Officer only.
     """
-    # Test for: test_complete_fails_from_in_progress (and others)
-    if measure.status.code != "PENDING_REVIEW":
-        raise MeasureTransitionError(
-            "Measure must be PENDING_REVIEW to be returned."
-        )
-
-    # Permission check (from tests)
+    # Check permission FIRST - only Risk Officer can do this
     if not user.role or user.role.name != "Risk Officer":
         raise MeasurePermissionError(
-            "Only a Risk Officer can return a measure."
+            "Only Risk Officers can return measures to progress."
         )
 
+    # Then validate the state transition
+    role = get_contextual_role_name(measure, user)
+    validate_transition(measure.status.code, "IN_PROGRESS", role)
+
     measure.status = MeasureStatusRef.objects.get(code="IN_PROGRESS")
-    append_to_notes(measure, user, "REASON FOR RETURN", reason)
+    _append_to_notes(measure, user, "REASON FOR RETURN", reason)
     measure.save(update_fields=["status", "notes", "updated_at"])
     return measure
 
@@ -202,17 +328,13 @@ def complete(
     Moves a measure from PENDING_REVIEW to COMPLETED.
     Permission: Risk Officer only.
     """
-    # Test for: test_complete_fails_from_in_progress
-    if measure.status.code != "PENDING_REVIEW":
-        raise MeasureTransitionError(
-            "Measure must be PENDING_REVIEW to be completed."
-        )
-
-    # Permission check (from tests)
     if not user.role or user.role.name != "Risk Officer":
         raise MeasurePermissionError(
-            "Only a Risk Officer can complete a measure."
+            "Only Risk Officers can complete measures."
         )
+
+    role = get_contextual_role_name(measure, user)
+    validate_transition(measure.status.code, "COMPLETED", role)
 
     measure.status = MeasureStatusRef.objects.get(code="COMPLETED")
     measure.closure_comment = closure_comment
@@ -229,21 +351,14 @@ def cancel(*, measure: Measure, user: User, reason: str) -> Measure:
     Moves a measure to CANCELLED.
     Permission: Risk Officer only.
     """
-    # Test for: test_cancel_fails_on_open_measure
-    if measure.status.code not in ["IN_PROGRESS", "PENDING_REVIEW"]:
-        raise MeasureTransitionError(
-            "Cannot cancel a measure that is not IN_PROGRESS or PENDING_REVW."
-            " Use DELETE for OPEN measures."
-        )
-
-    # Permission check (from tests)
     if not user.role or user.role.name != "Risk Officer":
-        raise MeasurePermissionError(
-            "Only a Risk Officer can cancel a measure."
-        )
+        raise MeasurePermissionError("Only Risk Officers can cancel measures.")
+
+    role = get_contextual_role_name(measure, user)
+    validate_transition(measure.status.code, "CANCELLED", role)
 
     measure.status = MeasureStatusRef.objects.get(code="CANCELLED")
     measure.closed_at = timezone.now()
-    append_to_notes(measure, user, "REASON FOR CANCELLATION", reason)
+    _append_to_notes(measure, user, "REASON FOR CANCELLATION", reason)
     measure.save(update_fields=["status", "notes", "closed_at", "updated_at"])
     return measure
