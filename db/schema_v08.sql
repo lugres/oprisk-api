@@ -77,12 +77,14 @@ CREATE TABLE basel_business_lines (
     -- 8 Basel business lines (e.g. Retail Banking, Corporate Finance, etc.)
 );
 
+-- + risks
 CREATE TABLE risk_categories (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     description TEXT
 );
 
+-- + risks
 -- map internal risk categories to Basel event types
 CREATE TABLE risk_category_event_type (
   risk_category_id INT REFERENCES risk_categories(id) ON DELETE CASCADE,

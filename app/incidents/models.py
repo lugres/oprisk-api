@@ -204,6 +204,13 @@ class Incident(TimestampedModel, OwnedModel):
         blank=True,
     )
 
+    # link to risks
+    # risks = models.ManyToManyField(
+    #     "risks.Risk",
+    #     through="risks.IncidentRisk",
+    #     related_name="related_incidents",
+    # )
+
     def __str__(self):
         return self.title
 
