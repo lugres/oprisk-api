@@ -525,6 +525,29 @@ class RiskRelationshipTests(TestCase):
                 risk=self.risk_a, incident=self.incident
             )
 
+    def test_risk_can_link_to_multiple_incidents(self):
+        """Test that one risk can link to multiple incidents."""
+        incident2 = Incident.objects.create(
+            title="Second Breach",
+            created_by=self.user,
+            business_unit=self.bu,
+            status=self.inc_status,
+        )
+
+        self.risk_a.incidents.add(self.incident, incident2)
+
+        self.assertEqual(self.risk_a.incidents.count(), 2)
+        self.assertIn(self.incident, self.risk_a.incidents.all())
+        self.assertIn(incident2, self.risk_a.incidents.all())
+
+    def test_incident_can_link_to_multiple_risks(self):
+        """Test that one incident can link to multiple risks."""
+        self.incident.risks.add(self.risk_a, self.risk_b)
+
+        self.assertEqual(self.incident.risks.count(), 2)
+        self.assertIn(self.risk_a, self.incident.risks.all())
+        self.assertIn(self.risk_b, self.incident.risks.all())
+
 
 class RiskEdgeCaseTests(TestCase):
     """Tests for edge cases and boundary conditions."""
