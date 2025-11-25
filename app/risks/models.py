@@ -5,6 +5,7 @@ Data models for the risks app.
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.exceptions import ValidationError
 from django.utils.translation import gettext_lazy as _
 
 from core.models import TimestampedModel, OwnedModel
@@ -71,15 +72,17 @@ class RiskCategoryToBaselEventType(models.Model):
         unique_together = ("risk_category", "basel_event_type")
         verbose_name = "Risk Category to Basel Event Type Mapping"
 
+    def __str__(self):
+        return f"{self.risk_category.name} → {self.basel_event_type.name}"
+
 
 # --- 3. CORE RISK MODEL ---
 
 
 class Risk(TimestampedModel, OwnedModel):
     """
-    The core Risk entity - a potential loss resulting from ...
-    inadequate or failed internal processes, people,
-    and systems, or from external events.
+    The core Risk entity - a potential loss resulting from inadequate or
+    failed internal processes, people, and systems, or from external events.
     Implementing a typical RCSA lifecycle.
     """
 
@@ -107,6 +110,7 @@ class Risk(TimestampedModel, OwnedModel):
         help_text="The specific Basel category for external reporting.",
     )
 
+    # Organizational context
     business_unit = models.ForeignKey(
         BusinessUnit, on_delete=models.PROTECT, blank=True, null=True
     )
@@ -191,7 +195,35 @@ class Risk(TimestampedModel, OwnedModel):
     )
     # controls = models.ManyToManyField(Control, through="RiskControl")
 
+    # --- Data Integrity Validation ---
+
+    def clean(self):
+        """Model-level data validation (data INTEGRITY)."""
+        super().clean()
+
+        # Validate Basel type is consistent with risk category
+        if self.basel_event_type and self.risk_category:
+            allowed_types = self.risk_category.basel_event_types.all()
+            if self.basel_event_type not in allowed_types:
+                raise ValidationError(
+                    {
+                        "basel_event_type": (
+                            f"Basel event type '{self.basel_event_type.name}'"
+                            f" is not valid for risk category "
+                            f"'{self.risk_category.name}'. "
+                            f"Allowed types: "
+                            f"{', '.join([t.name for t in allowed_types])}"
+                        )
+                    }
+                )
+
+    def save(self, *args, **kwargs):
+        """Override save to enforce data validation."""
+        self.full_clean()  # Ensures clean() is called
+        super().save(*args, **kwargs)
+
     # --- Computed Properties (Domain Logic) ---
+
     @property
     def inherent_risk_score(self) -> int | None:
         """Returns inherent risk score if risk was assessed."""
@@ -236,14 +268,13 @@ class RiskMeasure(models.Model):
         unique_together = ("risk", "measure")
         verbose_name = "Risk to Measure Link"
 
+    # !!- Controls to be added later, maybe to Control model if in separate app
+    # class RiskControl(models.Model):
+    #     """Links Risks to Controls."""
 
-# !!- Controls to be added later, maybe to Control model if in separate app
-# class RiskControl(models.Model):
-#     """Links Risks to Controls."""
+    #     risk = models.ForeignKey(Risk, on_delete=models.CASCADE)
+    #     control = models.ForeignKey(Control, on_delete=models.CASCADE)
 
-#     risk = models.ForeignKey(Risk, on_delete=models.CASCADE)
-#     control = models.ForeignKey(Control, on_delete=models.CASCADE)
-
-#     class Meta:
-#         unique_together = ("risk", "control")
-#         verbose_name = "Risk to Control Link"
+    #     class Meta:
+    #         unique_together = ("risk", "control")
+    #         verbose_name = "Risk to Control Link"

@@ -1,5 +1,7 @@
 """
 Tests for the models in the measures app.
+Focuses on data integrity, field validation, and model behavior.
+Does NOT test business logic (see test_workflows.py and test_services.py).
 """
 
 from django.test import TestCase
@@ -33,7 +35,7 @@ User = get_user_model()
 
 
 class RiskModelTests(TestCase):
-    """Tests for the core Risk model and its relationships."""
+    """Tests for the core Risk model and its basic behavior."""
 
     @classmethod
     def setUpTestData(cls):
@@ -75,6 +77,8 @@ class RiskModelTests(TestCase):
 
     # Model Integrity and Constraint Tests
 
+    # --- Basic CRUD Tests ---
+
     def test_risk_creation(self):
         """Test basic risk creation and default status."""
         self.assertIsInstance(self.risk, Risk)
@@ -82,16 +86,77 @@ class RiskModelTests(TestCase):
         self.assertEqual(self.risk.created_by, self.user)
         self.assertIsNotNone(self.risk.created_at)
 
+    def test_risk_str_representation(self):
+        """Test Risk __str__ method."""
+        self.risk.id = 42
+        expected = "Risk #42: System Outage Risk"
+        self.assertEqual(str(self.risk), expected)
+
+    # --- Field Constraint Tests ---
+
+    def test_title_is_required(self):
+        """Test that title cannot be blank."""
+        risk = Risk(
+            description="Test",
+            risk_category=self.category,
+            created_by=self.user,
+            owner=self.user,
+            business_unit=self.bu,
+        )
+
+        with self.assertRaises(ValidationError) as cm:
+            risk.full_clean()
+
+        self.assertIn("title", cm.exception.message_dict)
+
+    def test_description_is_required(self):
+        """Test that description cannot be blank."""
+        risk = Risk(
+            title="Test",
+            risk_category=self.category,
+            created_by=self.user,
+            owner=self.user,
+            business_unit=self.bu,
+        )
+
+        with self.assertRaises(ValidationError) as cm:
+            risk.full_clean()
+
+        self.assertIn("description", cm.exception.message_dict)
+
+    def test_risk_category_is_required(self):
+        """Test that risk_category cannot be null."""
+        with self.assertRaises(ValidationError):
+            Risk.objects.create(
+                title="Test",
+                description="Test",
+                risk_category=None,
+                created_by=self.user,
+                owner=self.user,
+            )
+
+    def test_title_max_length(self):
+        """Test title respects max_length of 255."""
+        long_title = "A" * 256
+        risk = Risk(
+            title=long_title,
+            description="Test",
+            risk_category=self.category,
+            created_by=self.user,
+            owner=self.user,
+            business_unit=self.bu,
+        )
+
+        with self.assertRaises(ValidationError):
+            risk.full_clean()
+
+    # --- Database Constraint Tests ---
+
     def test_on_delete_protect_for_category(self):
         """Test that deleting a RiskCategory fails if a Risk references it."""
         # 1. Verify PROTECT works (cannot delete category while risk uses it)
         with self.assertRaises(IntegrityError):
             self.category.delete()
-
-        # # Test deletion succeeds if no Risk references it
-        # self.risk.risk_category = None
-        # self.risk.save()
-        # self.category.delete()
 
         # 2. Verify deletion works when the reference is removed
         # Since risk_category is NOT nullable, we must delete the Risk itself
@@ -109,6 +174,8 @@ class RiskModelTests(TestCase):
         # Risk is owned by self.user
         with self.assertRaises(IntegrityError):
             self.user.delete()
+
+    # --- Score Validator Tests ---
 
     def test_score_validators(self):
         """Test that scores must be between 1 and 5 (inclusive)."""
@@ -148,90 +215,233 @@ class RiskModelTests(TestCase):
         self.risk.residual_impact = 2
         self.assertEqual(self.risk.residual_risk_score, 2)
 
-    # !- test fails, too complex, replaced with other 3 simpler tests below
+    def test_inherent_risk_score_with_only_likelihood(self):
+        """Test that partial scores return None."""
+        self.risk.inherent_likelihood = 4
+        self.risk.inherent_impact = None
+        self.assertIsNone(self.risk.inherent_risk_score)
 
-    # def test_risk_category_to_basel_event_type_integrity(self):
-    #     """Test the M2M through model unique constraint and foreign keys."""
+    def test_inherent_risk_score_with_only_impact(self):
+        """Test that partial scores return None."""
+        self.risk.inherent_likelihood = None
+        self.risk.inherent_impact = 3
+        self.assertIsNone(self.risk.inherent_risk_score)
 
-    #     # 1. Verify the pre-existing link (1, 1) from setUpTestData exists.
-    #     # We don't need to create it again to prove it exists.
-    #     self.assertTrue(
-    #         RiskCategoryToBaselEventType.objects.filter(
-    #             risk_category=self.category, basel_event_type=self.basel_type
-    #         ).exists()
-    #     )
+    def test_risk_score_boundary_values(self):
+        """Test risk scores at boundaries."""
+        # Minimum score
+        self.risk.inherent_likelihood = 1
+        self.risk.inherent_impact = 1
+        self.assertEqual(self.risk.inherent_risk_score, 1)
 
-    #     # 2. Test successful creation of a NEW link (1, 2).
-    #     link_1 = RiskCategoryToBaselEventType.objects.create(
-    #         risk_category=self.category, basel_event_type=self.basel_type_2
-    #     )
-    #     self.assertIsInstance(link_1, RiskCategoryToBaselEventType)
+        # Maximum score
+        self.risk.residual_likelihood = 5
+        self.risk.residual_impact = 5
+        self.assertEqual(self.risk.residual_risk_score, 25)
 
-    #     # 3. Test unique constraint enforcement (Try to create 1, 2 again).
-    #     with self.assertRaises(IntegrityError):
-    #         RiskCategoryToBaselEventType.objects.create(
-    #             risk_category=self.category,
-    #             basel_event_type=self.basel_type_2,
-    #         )
+    # --- Timestamp Tests ---
 
-    #     # 4. Test that deleting the category cascades to the link table.
-    #     # We must delete the Risk first because of on_delete=PROTECT
-    #     # on the Category.
-    #     self.risk.delete()
-    #     self.category.delete()
+    def test_created_at_auto_set(self):
+        """Test that created_at is automatically set."""
+        self.assertIsNotNone(self.risk.created_at)
 
-    #     # Both links should be gone due to CASCADE.
-    #     self.assertEqual(RiskCategoryToBaselEventType.objects.count(), 0)
+    def test_updated_at_auto_updates(self):
+        """Test that updated_at changes on save."""
+        import time
+
+        original_updated = self.risk.updated_at
+
+        time.sleep(0.01)
+
+        self.risk.description = "Updated"
+        self.risk.save()
+
+        self.assertGreater(self.risk.updated_at, original_updated)
+
+
+# M2M Relationship Tests
+
+
+class RiskCategoryTests(TestCase):
+    """Tests for RiskCategory and Basel event type mapping."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Set up data for risk category and Basel mapping tests."""
+        cls.basel_type = BaselEventType.objects.create(name="Internal Fraud")
+        cls.basel_type_2 = BaselEventType.objects.create(name="External Fraud")
+        cls.category = RiskCategory.objects.create(name="Fraud Risk")
+        cls.category.basel_event_types.add(cls.basel_type)
+
+    def test_risk_category_str_representation(self):
+        """Test RiskCategory __str__ method."""
+        self.assertEqual(str(self.category), "Fraud Risk")
 
     def test_risk_category_to_basel_event_type_creation(self):
-        """Test successful M2M link creation and check link count."""
-        # 1. Assert pre-existing link (1, 1) from setUpTestData is there.
+        """Test successful M2M link creation."""
         self.assertTrue(
             RiskCategoryToBaselEventType.objects.filter(
                 risk_category=self.category, basel_event_type=self.basel_type
             ).exists()
         )
 
-        # 2. Successfully create the NEW link (1, 2).
+        # Create second link
         link_2 = RiskCategoryToBaselEventType.objects.create(
             risk_category=self.category, basel_event_type=self.basel_type_2
         )
         self.assertIsInstance(link_2, RiskCategoryToBaselEventType)
         self.assertEqual(RiskCategoryToBaselEventType.objects.count(), 2)
 
-    def test_risk_category_to_basel_event_type_unique_constraint(self):
-        """Dedicated test for IntegrityError on unique_together constraint."""
-        # The link (1, 1) is created in setUpTestData. Try to create it again.
+    def test_risk_category_to_basel_unique_constraint(self):
+        """Test unique_together constraint on link table."""
         with self.assertRaises(IntegrityError):
             RiskCategoryToBaselEventType.objects.create(
                 risk_category=self.category, basel_event_type=self.basel_type
             )
 
-    def test_risk_category_to_basel_event_type_cascade(self):
-        """Test that deleting RiskCategory cascades to delete link rows."""
-        # Create the second link (1, 2) necessary for the cascade check.
+    def test_risk_category_to_basel_cascade(self):
+        """Test that deleting RiskCategory cascades to link table."""
         RiskCategoryToBaselEventType.objects.create(
             risk_category=self.category, basel_event_type=self.basel_type_2
         )
 
-        # Count should be 2: (1, 1) from setup, (1, 2) from above.
         self.assertEqual(RiskCategoryToBaselEventType.objects.count(), 2)
 
-        # 1. Must delete the Risk object first
-        # (due to on_delete=PROTECT on Category).
-        self.risk.delete()
-
-        # 2. Now delete the Category, which should CASCADE to the link table.
         self.category.delete()
 
-        # Assert both links are gone due to CASCADE
+        # Both links should be gone due to CASCADE
         self.assertEqual(RiskCategoryToBaselEventType.objects.count(), 0)
 
+    def test_risk_category_to_basel_str_representation(self):
+        """Test RiskCategoryToBaselEventType __str__ method."""
+        link = RiskCategoryToBaselEventType.objects.get(
+            risk_category=self.category, basel_event_type=self.basel_type
+        )
+        expected = f"{self.category.name} → {self.basel_type.name}"
+        self.assertEqual(str(link), expected)
 
-# M2M Relationship Tests
+
+class RiskBaselValidationTests(TestCase):
+    """Tests for Basel event type validation (data integrity via clean())."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Set up data for Basel event type test cases."""
+        cls.user = User.objects.create_user(
+            email="tester@example.com",
+            password="testpass123",
+        )
+
+        # Create Basel types
+        cls.internal_fraud = BaselEventType.objects.create(
+            name="Internal Fraud"
+        )
+        cls.external_fraud = BaselEventType.objects.create(
+            name="External Fraud"
+        )
+        cls.system_failure = BaselEventType.objects.create(
+            name="Business Disruption and System Failures"
+        )
+
+        # Create risk categories with mappings
+        cls.fraud_category = RiskCategory.objects.create(name="Fraud Risk")
+        cls.fraud_category.basel_event_types.add(
+            cls.internal_fraud, cls.external_fraud
+        )
+
+        cls.it_category = RiskCategory.objects.create(name="IT Risk")
+        cls.it_category.basel_event_types.add(cls.system_failure)
+
+        cls.bu = BusinessUnit.objects.create(name="Test BU")
+
+    def test_valid_basel_type_for_category(self):
+        """Test that valid Basel type passes clean()."""
+        risk = Risk(
+            title="Test Risk",
+            description="Test",
+            risk_category=self.fraud_category,
+            basel_event_type=self.internal_fraud,  # Valid
+            created_by=self.user,
+            owner=self.user,
+            business_unit=self.bu,
+        )
+        risk.full_clean()  # Should not raise
+        self.assertEqual(risk.basel_event_type, self.internal_fraud)
+
+    def test_invalid_basel_type_for_category_raises_validation_error(self):
+        """Test that invalid Basel type fails clean()."""
+        risk = Risk(
+            title="Test Risk",
+            description="Test",
+            risk_category=self.fraud_category,
+            basel_event_type=self.system_failure,  # INVALID
+            created_by=self.user,
+            owner=self.user,
+            business_unit=self.bu,
+        )
+
+        with self.assertRaises(ValidationError) as cm:
+            risk.full_clean()
+
+        self.assertIn("basel_event_type", cm.exception.message_dict)
+        self.assertIn("not valid for risk category", str(cm.exception))
+
+    def test_basel_type_can_be_null(self):
+        """Test that Basel type can be null (optional in DRAFT)."""
+        risk = Risk(
+            title="Test Risk",
+            description="Test",
+            risk_category=self.fraud_category,
+            basel_event_type=None,  # NULL is OK
+            status=RiskStatus.DRAFT,
+            created_by=self.user,
+            owner=self.user,
+            business_unit=self.bu,
+        )
+        risk.full_clean()  # Should not raise
+        self.assertIsNone(risk.basel_event_type)
+
+    def test_save_calls_full_clean(self):
+        """Test that save() enforces validation via full_clean()."""
+        risk = Risk(
+            title="Test Risk",
+            description="Test",
+            risk_category=self.fraud_category,
+            basel_event_type=self.system_failure,  # INVALID
+            created_by=self.user,
+            owner=self.user,
+            business_unit=self.bu,
+        )
+
+        # save() should call full_clean() and raise
+        with self.assertRaises(ValidationError):
+            risk.save()
+
+        # Risk should not exist in DB
+        self.assertFalse(Risk.objects.filter(title="Test Risk").exists())
+
+    def test_changing_category_with_incompatible_basel_type(self):
+        """Test that changing category to incompatible Basel type fails."""
+        # Create risk with valid mapping
+        risk = Risk.objects.create(
+            title="Test Risk",
+            description="Test",
+            risk_category=self.fraud_category,
+            basel_event_type=self.internal_fraud,  # Valid for fraud_category
+            created_by=self.user,
+            owner=self.user,
+            business_unit=self.bu,
+        )
+
+        # Change category to IT (doesn't allow internal_fraud)
+        risk.risk_category = self.it_category
+
+        with self.assertRaises(ValidationError):
+            risk.full_clean()
 
 
 class RiskRelationshipTests(TestCase):
+    """Tests for M2M relationships between Risk and other entities."""
 
     @classmethod
     def setUpTestData(cls):
@@ -314,3 +524,61 @@ class RiskRelationshipTests(TestCase):
             IncidentRisk.objects.create(
                 risk=self.risk_a, incident=self.incident
             )
+
+
+class RiskEdgeCaseTests(TestCase):
+    """Tests for edge cases and boundary conditions."""
+
+    @classmethod
+    def setUpTestData(cls):
+        """Set up data for edge test cases."""
+        cls.user = User.objects.create_user(
+            email="tester@example.com",
+            password="testpass123",
+        )
+        cls.basel_type = BaselEventType.objects.create(name="Test Type")
+        cls.category = RiskCategory.objects.create(name="Test Category")
+        cls.category.basel_event_types.add(cls.basel_type)
+        cls.bu = BusinessUnit.objects.create(name="Test BU")
+
+    def test_multiple_risks_same_category_and_basel(self):
+        """Test that multiple risks can share category and Basel type."""
+        risk1 = Risk.objects.create(
+            title="Risk 1",
+            description="Test 1",
+            risk_category=self.category,
+            basel_event_type=self.basel_type,
+            created_by=self.user,
+            owner=self.user,
+            business_unit=self.bu,
+        )
+
+        risk2 = Risk.objects.create(
+            title="Risk 2",
+            description="Test 2",
+            risk_category=self.category,
+            basel_event_type=self.basel_type,  # Same Basel type
+            created_by=self.user,
+            owner=self.user,
+            business_unit=self.bu,
+        )
+
+        self.assertNotEqual(risk1.id, risk2.id)
+        self.assertEqual(risk1.basel_event_type, risk2.basel_event_type)
+
+    def test_risk_with_all_optional_context_null(self):
+        """Test risk can exist without business_unit, process, product."""
+        risk = Risk.objects.create(
+            title="Generic Risk",
+            description="Test",
+            risk_category=self.category,
+            business_unit=None,
+            business_process=None,
+            product=None,
+            created_by=self.user,
+            owner=self.user,
+        )
+
+        self.assertIsNone(risk.business_unit)
+        self.assertIsNone(risk.business_process)
+        self.assertIsNone(risk.product)
