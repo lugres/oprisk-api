@@ -176,7 +176,9 @@ class Risk(TimestampedModel, OwnedModel):
     notes = models.TextField(
         blank=True,
         default="",
-        help_text="General notes, comments, or justification for status changes.",
+        help_text=(
+            "General notes, comments, or justification for status changes."
+        ),
     )
 
     # --- Relationships: M2M Fields using 'through' for cleaner access ---
