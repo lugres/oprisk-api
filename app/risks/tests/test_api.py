@@ -10,7 +10,8 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 from rest_framework import status
-from datetime import date, timedelta
+
+# from datetime import date, timedelta
 
 from risks.models import Risk, RiskStatus, RiskCategory
 from incidents.models import Incident, IncidentStatusRef
@@ -318,9 +319,10 @@ class RiskQuerysetTests(RiskTestBase):
         # Employee should have minimal access
         # ! (exact rules depend on your implementation - see BRD! doc)
 
-    ### Employee
+    # ### Employee
 
-    # **Definition:** General bank employee with read-only access to the risk register.
+    # **Definition:** General bank employee with read-only access to the risk
+    # register.
 
     # **Permissions:**
     # - View risks related to their business unit
@@ -1136,3 +1138,254 @@ class RiskFilteringTests(RiskTestBase):
         res = self.client.get(url)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+
+# --- Response Format Tests ---
+
+
+class RiskResponseFormatTests(RiskTestBase):
+    """Test API response format and structure."""
+
+    def test_risk_detail_includes_available_transitions(self):
+        """Test that risk detail includes available_transitions."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_detail_url(self.risk_draft.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("available_transitions", res.data)
+
+        # DRAFT risk should have submit-for-review available
+        transition_actions = [
+            t["action"] for t in res.data["available_transitions"]
+        ]
+        self.assertIn("submit-for-review", transition_actions)
+
+    def test_risk_detail_includes_permissions(self):
+        """Test that risk detail includes permissions object."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_detail_url(self.risk_draft.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("permissions", res.data)
+        self.assertIn("can_edit", res.data["permissions"])
+        self.assertIn("can_delete", res.data["permissions"])
+        self.assertIn("can_transition", res.data["permissions"])
+
+    def test_risk_detail_includes_linked_incidents(self):
+        """Test that risk detail includes linked_incidents."""
+        self.risk_active.incidents.add(self.incident)
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_detail_url(self.risk_active.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("linked_incidents", res.data)
+        self.assertEqual(len(res.data["linked_incidents"]), 1)
+        self.assertEqual(
+            res.data["linked_incidents"][0]["id"], self.incident.id
+        )
+
+    def test_risk_detail_includes_linked_measures(self):
+        """Test that risk detail includes linked_measures."""
+        self.risk_active.measures.add(self.measure)
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_detail_url(self.risk_active.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("linked_measures", res.data)
+        self.assertEqual(len(res.data["linked_measures"]), 1)
+
+    def test_risk_detail_includes_computed_scores(self):
+        """Test that risk detail includes computed risk scores."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_detail_url(self.risk_active.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("inherent_risk_score", res.data)
+        self.assertIn("residual_risk_score", res.data)
+
+        expected_inherent = (
+            self.risk_active.inherent_likelihood
+            * self.risk_active.inherent_impact
+        )
+        self.assertEqual(res.data["inherent_risk_score"], expected_inherent)
+
+    def test_risk_list_uses_pagination(self):
+        """Test that list endpoint uses pagination."""
+        # Create many risks
+        for i in range(60):
+            Risk.objects.create(
+                title=f"Test Risk {i}",
+                description="Test",
+                risk_category=self.fraud_category,
+                business_unit=self.bu_ops,
+                status=RiskStatus.DRAFT,
+                created_by=self.manager,
+                owner=self.manager,
+            )
+
+        self.client.force_authenticate(user=self.risk_officer)
+        res = self.client.get(risk_list_url())
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("count", res.data)
+        self.assertIn("results", res.data)
+        # Results should be limited (default page size)
+        self.assertLessEqual(len(res.data["results"]), 50)
+
+    def test_error_response_format(self):
+        """Test error responses have consistent format."""
+        self.client.force_authenticate(user=self.employee)
+        payload = {
+            "title": "Test",
+            "description": "Test",
+            "risk_category": self.fraud_category.id,
+            "business_unit": self.bu_ops.id,
+            "owner": self.manager.id,
+        }
+        res = self.client.post(risk_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(isinstance(res.data, dict))
+        self.assertIn("error", res.data)
+
+
+# --- Integration Tests ---
+
+
+class RiskIntegrationTests(RiskTestBase):
+    """Integration tests for complex workflows and edge cases."""
+
+    def test_full_risk_lifecycle(self):
+        """Test complete workflow: DRAFT → ASSESSED → ACTIVE → RETIRED."""
+        # Create risk as Manager
+        self.client.force_authenticate(user=self.manager)
+        payload = {
+            "title": "Full Lifecycle Test Risk",
+            "description": "Testing complete risk lifecycle",
+            "risk_category": self.fraud_category.id,
+            "business_unit": self.bu_ops.id,
+            "owner": self.owner_user.id,
+            "inherent_likelihood": 4,
+            "inherent_impact": 3,
+        }
+        res = self.client.post(risk_list_url(), payload)
+        risk_id = res.data["id"]
+
+        # Submit for review
+        url = risk_action_url(risk_id, "submit-for-review")
+        res = self.client.post(url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Risk Officer adds Basel type and residual scores
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_detail_url(risk_id)
+        res = self.client.patch(
+            url,
+            {
+                "basel_event_type": self.basel_internal_fraud.id,
+                "residual_likelihood": 2,
+                "residual_impact": 2,
+            },
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Approve
+        url = risk_action_url(risk_id, "approve")
+        res = self.client.post(url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Retire
+        url = risk_action_url(risk_id, "retire")
+        reason = "Process discontinued after organizational restructuring"
+        res = self.client.post(url, {"reason": reason})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Verify final state
+        risk = Risk.objects.get(id=risk_id)
+        self.assertEqual(risk.status, RiskStatus.RETIRED)
+        self.assertEqual(risk.retirement_reason, reason)
+
+    def test_reassessment_cycle(self):
+        """Test ACTIVE → ASSESSED → ACTIVE reassessment workflow."""
+        # Request reassessment
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "request-reassessment")
+        res = self.client.post(url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Update scores
+        url = risk_detail_url(self.risk_active.id)
+        res = self.client.patch(
+            url, {"inherent_likelihood": 3, "residual_likelihood": 1}
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Re-approve
+        url = risk_action_url(self.risk_active.id, "approve")
+        res = self.client.post(url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Verify back to ACTIVE
+        self.risk_active.refresh_from_db()
+        self.assertEqual(self.risk_active.status, RiskStatus.ACTIVE)
+
+    def test_risk_linking_to_multiple_incidents(self):
+        """Test linking one risk to multiple incidents."""
+        # Create second incident
+        inc_status, _ = IncidentStatusRef.objects.get_or_create(
+            code="DRAFT", defaults={"name": "Draft"}
+        )
+        incident2 = Incident.objects.create(
+            title="Second Test Incident",
+            created_by=self.manager,
+            status=inc_status,
+            business_unit=self.bu_ops,
+        )
+
+        self.client.force_authenticate(user=self.risk_officer)
+
+        # Link to first incident
+        url = risk_action_url(self.risk_active.id, "link-to-incident")
+        res = self.client.post(url, {"incident_id": self.incident.id})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Link to second incident
+        res = self.client.post(url, {"incident_id": incident2.id})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Verify both links
+        self.assertEqual(self.risk_active.incidents.count(), 2)
+        self.assertIn(self.incident, self.risk_active.incidents.all())
+        self.assertIn(incident2, self.risk_active.incidents.all())
+
+    def test_send_back_and_resubmit_cycle(self):
+        """Test ASSESSED → DRAFT → ASSESSED workflow."""
+        # Send back
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_assessed.id, "send-back")
+        reason = "Need more justification for inherent impact score"
+        res = self.client.post(url, {"reason": reason})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Manager updates and resubmits
+        self.client.force_authenticate(user=self.manager)
+        url = risk_detail_url(self.risk_assessed.id)
+        res = self.client.patch(
+            url, {"description": "Updated with more detail"}
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        url = risk_action_url(self.risk_assessed.id, "submit-for-review")
+        res = self.client.post(url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Verify notes contain both interactions
+        self.risk_assessed.refresh_from_db()
+        self.assertIn(reason, self.risk_assessed.notes)
