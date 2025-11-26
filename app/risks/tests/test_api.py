@@ -26,17 +26,17 @@ from references.models import (
 User = get_user_model()
 
 # All test classes inside this file:
-#  RiskTestBase - shared setup
-#  RiskQuerysetTests - data visibility
-#  RiskCRUDTests - create/delete operations
-#  RiskFieldLevelSecurityTests - PATCH permissions
-#  RiskWorkflowTests - state transitions
-#  RiskCommentTests - specific feature
-#  RiskLinkingTests - relationships
-#  RiskValidationTests - business rules
-#  RiskFilteringTests - querystring params
-#  RiskResponseFormatTests - serializer output
-#  RiskIntegrationTests - end-to-end flows
+#  RiskTestBase - shared setup (users, roles, etc.)
+#  RiskQuerysetTests - data segregation by role
+#  RiskCRUDTests - create/delete operations with permissions
+#  RiskFieldLevelSecurityTests - Dynamic field editing based on status & role
+#  RiskWorkflowTests - state machine transitions
+#  RiskBaselWorkflowTests - Basel event type validation throughout workflow
+#  RiskLinkingTests - relationships - linking/unlinking incidents and measures
+#  RiskValidationTests - business rules validation
+#  RiskFilteringTests - query parameter filtering and search
+#  RiskResponseFormatTests - serializer output and structure
+#  RiskIntegrationTests - end-to-end workflows
 
 # --- Helper Functions ---
 
@@ -734,3 +734,174 @@ class RiskWorkflowTests(RiskTestBase):
         res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_risk_officer_can_request_reassessment(self):
+        """Test Risk Officer can move ACTIVE → ASSESSED for reassessment."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "request-reassessment")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_active.refresh_from_db()
+        self.assertEqual(self.risk_active.status, RiskStatus.ASSESSED)
+        self.assertIsNotNone(self.risk_active.submitted_for_review_at)
+
+    def test_manager_cannot_request_reassessment(self):
+        """Test Manager cannot request reassessment."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_action_url(self.risk_active.id, "request-reassessment")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_risk_officer_can_retire_active_risk(self):
+        """Test Risk Officer can move ACTIVE → RETIRED."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "retire")
+        reason = (
+            "Business process discontinued after merger with another division"
+        )
+        payload = {"reason": reason}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_active.refresh_from_db()
+        self.assertEqual(self.risk_active.status, RiskStatus.RETIRED)
+        self.assertEqual(self.risk_active.retirement_reason, reason)
+
+    def test_risk_officer_can_retire_assessed_risk(self):
+        """Test Risk Officer can retire risk in ASSESSED status."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_assessed.id, "retire")
+        reason = "Risk no longer applicable after policy change"
+        payload = {"reason": reason}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_assessed.refresh_from_db()
+        self.assertEqual(self.risk_assessed.status, RiskStatus.RETIRED)
+
+    def test_retire_without_reason_fails(self):
+        """Test retirement requires reason payload."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "retire")
+        res = self.client.post(url, {})
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("reason", str(res.data))
+
+    def test_retire_with_short_reason_fails(self):
+        """Test retirement requires substantial reason (20+ chars)."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "retire")
+        payload = {"reason": "Too short"}  # Less than 20 chars
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("at least 20 characters", str(res.data))
+
+    def test_manager_cannot_retire_risk(self):
+        """Test Manager cannot retire risks."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_action_url(self.risk_active.id, "retire")
+        payload = {
+            "reason": "This should fail regardless of reason length here"
+        }
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_cannot_retire_draft_risk(self):
+        """Test cannot retire risk in DRAFT status."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_draft.id, "retire")
+        payload = {"reason": "Valid reason with enough characters here"}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn(
+            "Transition from 'DRAFT' to 'RETIRED' is not defined",
+            str(res.data),
+        )
+
+
+# --- Basel Event Type Workflow Tests ---
+
+
+class RiskBaselWorkflowTests(RiskTestBase):
+    """Test Basel event type workflow validation."""
+
+    def test_can_submit_without_basel_type(self):
+        """Test risk can be submitted without Basel type (opt in DRAFT)."""
+        self.risk_draft.basel_event_type = None
+        self.risk_draft.save()
+
+        self.client.force_authenticate(user=self.manager)
+        url = risk_action_url(self.risk_draft.id, "submit-for-review")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_draft.refresh_from_db()
+        self.assertEqual(self.risk_draft.status, RiskStatus.ASSESSED)
+
+    def test_submit_with_valid_basel_type_succeeds(self):
+        """Test submission with valid Basel type succeeds."""
+        self.risk_draft.basel_event_type = self.basel_internal_fraud
+        self.risk_draft.save()
+
+        self.client.force_authenticate(user=self.manager)
+        url = risk_action_url(self.risk_draft.id, "submit-for-review")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_submit_with_invalid_basel_type_fails(self):
+        """Test submission fails with Basel type not mapped to category."""
+        # fraud_category allows internal/external fraud, NOT system_failure
+        self.risk_draft.basel_event_type = self.basel_system_failure
+        self.risk_draft.save()
+
+        self.client.force_authenticate(user=self.manager)
+        url = risk_action_url(self.risk_draft.id, "submit-for-review")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("not valid for risk category", str(res.data))
+
+    def test_cannot_approve_without_basel_type(self):
+        """Test approval requires Basel type to be set."""
+        self.risk_assessed.basel_event_type = None
+        self.risk_assessed.save()
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_assessed.id, "approve")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Basel event type must be selected", str(res.data))
+
+    def test_approve_validates_basel_type_consistency(self):
+        """Test approval validates Basel type is valid for category."""
+        # Set invalid Basel type
+        self.risk_assessed.basel_event_type = self.basel_internal_fraud
+        # it_category doesn't allow internal_fraud
+        self.risk_assessed.save()
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_assessed.id, "approve")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("not valid for risk category", str(res.data))
+
+    def test_patch_risk_with_invalid_basel_type_fails(self):
+        """Test PATCH with invalid Basel type fails validation."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_detail_url(self.risk_assessed.id)
+        # Try to set Basel type not allowed for it_category
+        res = self.client.patch(
+            url, {"basel_event_type": self.basel_internal_fraud.id}
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("not valid for risk category", str(res.data))
