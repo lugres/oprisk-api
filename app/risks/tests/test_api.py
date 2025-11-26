@@ -905,3 +905,234 @@ class RiskBaselWorkflowTests(RiskTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("not valid for risk category", str(res.data))
+
+
+# --- Linking Tests ---
+
+
+class RiskLinkingTests(RiskTestBase):
+    """Test linking/unlinking risks to incidents and measures."""
+
+    def test_link_risk_to_incident_succeeds(self):
+        """Test linking a risk to an incident."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "link-to-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn(self.incident, self.risk_active.incidents.all())
+
+    def test_manager_can_link_risk_to_incident(self):
+        """Test Manager can link risks to incidents."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_action_url(self.risk_active.id, "link-to-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_link_to_incident_fails_if_already_linked(self):
+        """Test linking already-linked risk returns error."""
+        self.risk_active.incidents.add(self.incident)
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "link-to-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already linked", str(res.data))
+
+    def test_link_retired_risk_to_incident_fails(self):
+        """Test cannot link retired risks."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_retired.id, "link-to-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Cannot link retired risks", str(res.data))
+
+    def test_link_to_nonexistent_incident_fails(self):
+        """Test linking to non-existent incident fails."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "link-to-incident")
+        payload = {"incident_id": 99999}
+        res = self.client.post(url, payload)
+
+        self.assertIn(
+            res.status_code,
+            [status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND],
+        )
+
+    def test_unlink_risk_from_incident_succeeds(self):
+        """Test unlinking a risk from an incident."""
+        self.risk_active.incidents.add(self.incident)
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "unlink-from-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertNotIn(self.incident, self.risk_active.incidents.all())
+
+    def test_unlink_not_linked_incident_fails(self):
+        """Test unlinking non-existent link returns error."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "unlink-from-incident")
+        payload = {"incident_id": self.incident.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("is not linked", str(res.data))
+
+    def test_link_risk_to_measure_succeeds(self):
+        """Test linking a risk to a measure."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "link-to-measure")
+        payload = {"measure_id": self.measure.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn(self.measure, self.risk_active.measures.all())
+
+    def test_link_to_measure_fails_if_already_linked(self):
+        """Test linking already-linked measure returns error."""
+        self.risk_active.measures.add(self.measure)
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "link-to-measure")
+        payload = {"measure_id": self.measure.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already linked", str(res.data))
+
+    def test_unlink_risk_from_measure_succeeds(self):
+        """Test unlinking a risk from a measure."""
+        self.risk_active.measures.add(self.measure)
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_active.id, "unlink-from-measure")
+        payload = {"measure_id": self.measure.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertNotIn(self.measure, self.risk_active.measures.all())
+
+
+# --- Validation Tests ---
+
+
+class RiskValidationTests(RiskTestBase):
+    """Test input validation and business rules."""
+
+    def test_score_out_of_range_fails(self):
+        """Test scores must be between 1 and 5."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_detail_url(self.risk_draft.id)
+        res = self.client.patch(url, {"inherent_likelihood": 6})
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_residual_equals_inherent_is_valid(self):
+        """Test residual = inherent is acceptable (no mitigation)."""
+        self.risk_assessed.residual_likelihood = (
+            self.risk_assessed.inherent_likelihood
+        )
+        self.risk_assessed.residual_impact = self.risk_assessed.inherent_impact
+        self.risk_assessed.save()
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_assessed.id, "approve")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_create_risk_with_invalid_owner_fails(self):
+        """Test creating risk with non-existent owner fails."""
+        self.client.force_authenticate(user=self.manager)
+        payload = {
+            "title": "Test Risk",
+            "description": "Test",
+            "risk_category": self.fraud_category.id,
+            "business_unit": self.bu_ops.id,
+            "owner": 99999,  # Non-existent
+        }
+        res = self.client.post(risk_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+# --- Filtering Tests ---
+
+
+class RiskFilteringTests(RiskTestBase):
+    """Test query parameter filtering and search functionality."""
+
+    def test_filter_by_status(self):
+        """Test filtering risks by status."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{risk_list_url()}?status=DRAFT"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Should only include DRAFT risks
+        for risk in res.data["results"]:
+            self.assertEqual(risk["status"], "DRAFT")
+
+    def test_filter_by_owner_me(self):
+        """Test filtering by owner=me."""
+        self.client.force_authenticate(user=self.owner_user)
+        url = f"{risk_list_url()}?owner=me"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Should only include risks owned by owner_user
+        for risk in res.data["results"]:
+            self.assertEqual(risk["owner"]["id"], self.owner_user.id)
+
+    def test_filter_by_category(self):
+        """Test filtering by risk_category."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{risk_list_url()}?risk_category={self.fraud_category.id}"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Should only include risks in fraud_category
+        for risk in res.data["results"]:
+            self.assertEqual(
+                risk["risk_category"]["id"], self.fraud_category.id
+            )
+
+    def test_filter_by_basel_event_type(self):
+        """Test filtering by basel_event_type."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = (
+            f"{risk_list_url()}?basel_event_type"
+            f"={self.basel_system_failure.id}"
+        )
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_search_in_title_and_description(self):
+        """Test full-text search in title and description."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{risk_list_url()}?search=Fraud"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Should find risks with "Fraud" in title or description
+        risk_ids = [r["id"] for r in res.data["results"]]
+        self.assertIn(self.risk_draft.id, risk_ids)
+
+    def test_ordering_by_created_at(self):
+        """Test ordering results by created_at."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{risk_list_url()}?ordering=created_at"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
