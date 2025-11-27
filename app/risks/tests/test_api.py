@@ -32,6 +32,7 @@ User = get_user_model()
 #  RiskCRUDTests - create/delete operations with permissions
 #  RiskFieldLevelSecurityTests - Dynamic field editing based on status & role
 #  RiskWorkflowTests - state machine transitions
+#  RiskCommentTests - comments during workflow transitions
 #  RiskBaselWorkflowTests - Basel event type validation throughout workflow
 #  RiskLinkingTests - relationships - linking/unlinking incidents and measures
 #  RiskValidationTests - business rules validation
@@ -825,6 +826,71 @@ class RiskWorkflowTests(RiskTestBase):
             "Transition from 'DRAFT' to 'RETIRED' is not defined",
             str(res.data),
         )
+        # Verify the status did NOT change
+        self.risk_draft.refresh_from_db()
+        self.assertEqual(self.risk_draft.status, RiskStatus.DRAFT)
+
+
+# --- Comments Workflow Tests ---
+
+
+class RiskCommentTests(RiskTestBase):
+    """Test the dedicated endpoint for adding comments/notes."""
+
+    def setUp(self):
+        super().setUp()
+        self.comment_url = risk_action_url(self.risk_active.id, "add-comment")
+        self.payload = {
+            "comment": "Monitoring update: Controls are effective."
+        }
+
+    def test_risk_officer_can_add_comment_to_active_risk(self):
+        """Test Risk Officer can add a comment/note to an ACTIVE risk."""
+        self.client.force_authenticate(user=self.risk_officer)
+        res = self.client.post(self.comment_url, self.payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_active.refresh_from_db()
+        self.assertIn(self.payload["comment"], self.risk_active.notes)
+        self.assertIn(str(self.risk_officer.email), self.risk_active.notes)
+
+    def test_manager_can_add_comment_to_assessed_risk(self):
+        """Test Manager can add a comment/note to an ASSESSED risk."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_action_url(self.risk_assessed.id, "add-comment")
+        payload = {"comment": "Manager reviewed assessment. Looks good."}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_assessed.refresh_from_db()
+        self.assertIn(payload["comment"], self.risk_assessed.notes)
+
+    def test_employee_cannot_add_comment(self):
+        """Test Employee cannot add comments to a risk."""
+        self.client.force_authenticate(user=self.employee)
+        res = self.client.post(self.comment_url, self.payload)
+
+        self.assertIn(
+            res.status_code,
+            [status.HTTP_403_FORBIDDEN, status.HTTP_404_NOT_FOUND],
+        )
+
+    def test_cannot_add_comment_to_retired_risk(self):
+        """Test comments are disallowed on RETIRED risks."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_action_url(self.risk_retired.id, "add-comment")
+        res = self.client.post(url, self.payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("cannot be modified", str(res.data))
+
+    def test_add_comment_without_payload_fails(self):
+        """Test adding comment without 'comment' field fails."""
+        self.client.force_authenticate(user=self.manager)
+        res = self.client.post(self.comment_url, {})
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("comment", str(res.data))
 
 
 # --- Basel Event Type Workflow Tests ---
@@ -925,6 +991,7 @@ class RiskLinkingTests(RiskTestBase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertIn(self.incident, self.risk_active.incidents.all())
 
+    # old one, keep? yes for now
     def test_manager_can_link_risk_to_incident(self):
         """Test Manager can link risks to incidents."""
         self.client.force_authenticate(user=self.manager)
@@ -933,6 +1000,17 @@ class RiskLinkingTests(RiskTestBase):
         res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_manager_can_link_measure_to_draft_risk(self):
+        """Test Manager can link a Measure to a Risk in DRAFT status."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_action_url(self.risk_draft.id, "link-to-measure")
+        res = self.client.post(url, {"measure_id": self.measure.id})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_draft.refresh_from_db()
+        self.assertIn(self.measure, self.risk_draft.measures.all())
+        self.assertIn(self.risk_draft, self.measure.risks.all())
 
     def test_link_to_incident_fails_if_already_linked(self):
         """Test linking already-linked risk returns error."""
@@ -968,9 +1046,10 @@ class RiskLinkingTests(RiskTestBase):
             [status.HTTP_400_BAD_REQUEST, status.HTTP_404_NOT_FOUND],
         )
 
-    def test_unlink_risk_from_incident_succeeds(self):
-        """Test unlinking a risk from an incident."""
+    def test_risk_officer_can_unlink_incident_from_active_risk(self):
+        """Test Risk Officer can unlink an Incident from an ACTIVE risk."""
         self.risk_active.incidents.add(self.incident)
+        self.assertEqual(self.risk_active.incidents.count(), 1)
 
         self.client.force_authenticate(user=self.risk_officer)
         url = risk_action_url(self.risk_active.id, "unlink-from-incident")
@@ -978,7 +1057,8 @@ class RiskLinkingTests(RiskTestBase):
         res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertNotIn(self.incident, self.risk_active.incidents.all())
+        self.risk_active.refresh_from_db()
+        self.assertEqual(self.risk_active.incidents.count(), 0)
 
     def test_unlink_not_linked_incident_fails(self):
         """Test unlinking non-existent link returns error."""
@@ -1053,6 +1133,47 @@ class RiskValidationTests(RiskTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
 
+    def test_basel_event_type_must_be_mapped_to_category(self):
+        """Test that BaselEventType must be part of the RiskCat mapping."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_detail_url(self.risk_assessed.id)
+        original_basel = self.risk_assessed.basel_event_type
+
+        # Attempt to set an unmapped Basel type (internal_fraud not in it_cat)
+        res = self.client.patch(
+            url, {"basel_event_type": self.basel_internal_fraud.id}
+        )
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("not valid for risk category", str(res.data))
+        self.risk_assessed.refresh_from_db()
+        self.assertEqual(self.risk_assessed.basel_event_type, original_basel)
+
+    def test_owner_must_be_in_same_business_unit_as_risk(self):
+        """Test that risk owner must belong to the risk's business unit."""
+        self.client.force_authenticate(user=self.manager)
+
+        other_bu_owner = create_user(
+            "other_bu_owner_test@example.com",
+            "tstpw123",
+            self.role_mgr,
+            self.bu_risk,
+        )
+
+        payload = {
+            "title": "Invalid Owner Risk",
+            "description": "Owner from different BU",
+            "risk_category": self.fraud_category.id,
+            "business_unit": self.bu_ops.id,
+            "owner": other_bu_owner.id,
+        }
+        res = self.client.post(risk_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn(
+            "Owner must belong to the selected Business Unit", str(res.data)
+        )
+
     def test_create_risk_with_invalid_owner_fails(self):
         """Test creating risk with non-existent owner fails."""
         self.client.force_authenticate(user=self.manager)
@@ -1075,15 +1196,28 @@ class RiskFilteringTests(RiskTestBase):
     """Test query parameter filtering and search functionality."""
 
     def test_filter_by_status(self):
-        """Test filtering risks by status."""
+        """Test filtering risks by single status."""
         self.client.force_authenticate(user=self.risk_officer)
         url = f"{risk_list_url()}?status=DRAFT"
         res = self.client.get(url)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         # Should only include DRAFT risks
-        for risk in res.data["results"]:
-            self.assertEqual(risk["status"], "DRAFT")
+        risk_ids = [r["id"] for r in res.data["results"]]
+        self.assertIn(self.risk_draft.id, risk_ids)
+        self.assertNotIn(self.risk_active.id, risk_ids)
+
+    def test_filter_by_multiple_statuses(self):
+        """Test filtering by multiple status codes."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{risk_list_url()}?status=ACTIVE,RETIRED"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        risk_ids = [r["id"] for r in res.data["results"]]
+        self.assertIn(self.risk_active.id, risk_ids)
+        self.assertIn(self.risk_retired.id, risk_ids)
+        self.assertNotIn(self.risk_draft.id, risk_ids)
 
     def test_filter_by_owner_me(self):
         """Test filtering by owner=me."""
@@ -1095,6 +1229,16 @@ class RiskFilteringTests(RiskTestBase):
         # Should only include risks owned by owner_user
         for risk in res.data["results"]:
             self.assertEqual(risk["owner"]["id"], self.owner_user.id)
+
+    def test_filter_by_owner_id(self):
+        """Test filtering by owner's user ID."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = f"{risk_list_url()}?owner={self.owner_user.id}"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        risk_ids = [r["id"] for r in res.data["results"]]
+        self.assertEqual(len(risk_ids), 4)  # draft, assessed, active, retired
 
     def test_filter_by_category(self):
         """Test filtering by risk_category."""
@@ -1119,6 +1263,23 @@ class RiskFilteringTests(RiskTestBase):
         res = self.client.get(url)
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+    def test_filter_by_inherent_risk_score_range(self):
+        """Test filtering by combined inherent risk score (e.g. scr >= 15)."""
+        self.client.force_authenticate(user=self.risk_officer)
+        # risk_draft: 4*3 = 12
+        # risk_assessed: 5*4 = 20
+        # risk_active: 4*5 = 20
+        # risk_retired: 3*3 = 9
+        url = f"{risk_list_url()}?inherent_score__gte=15"
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        risk_ids = [r["id"] for r in res.data["results"]]
+        self.assertIn(self.risk_assessed.id, risk_ids)
+        self.assertIn(self.risk_active.id, risk_ids)
+        self.assertNotIn(self.risk_draft.id, risk_ids)
+        self.assertNotIn(self.risk_retired.id, risk_ids)
 
     def test_search_in_title_and_description(self):
         """Test full-text search in title and description."""
@@ -1216,6 +1377,40 @@ class RiskResponseFormatTests(RiskTestBase):
         )
         self.assertEqual(res.data["inherent_risk_score"], expected_inherent)
 
+    def test_draft_response_has_null_residual_score(self):
+        """Test that DRAFT risks have null residual scores."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_detail_url(self.risk_draft.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["inherent_risk_score"], 12)  # 4*3
+        self.assertIsNone(res.data["residual_risk_score"])
+
+    def test_response_includes_related_entity_counts(self):
+        """Test that counts of related Incidents and Measures are returned."""
+        self.risk_draft.incidents.add(self.incident)
+        self.risk_draft.measures.add(self.measure)
+
+        self.client.force_authenticate(user=self.manager)
+        url = risk_detail_url(self.risk_draft.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["incident_count"], 1)
+        self.assertEqual(res.data["measure_count"], 1)
+
+    def test_response_includes_lookup_fields_by_name(self):
+        """Test that foreign key fields return the object name/title."""
+        self.client.force_authenticate(user=self.manager)
+        url = risk_detail_url(self.risk_draft.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["risk_category"]["name"], "Fraud Risk")
+        self.assertEqual(res.data["business_unit"]["name"], "Operations")
+        self.assertEqual(res.data["owner"]["email"], "owner@example.com")
+
     def test_risk_list_uses_pagination(self):
         """Test that list endpoint uses pagination."""
         # Create many risks
@@ -1276,12 +1471,15 @@ class RiskIntegrationTests(RiskTestBase):
             "inherent_impact": 3,
         }
         res = self.client.post(risk_list_url(), payload)
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         risk_id = res.data["id"]
 
-        # Submit for review
+        # Submit for review (DRAFT → ASSESSED)
         url = risk_action_url(risk_id, "submit-for-review")
         res = self.client.post(url)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+        risk = Risk.objects.get(id=risk_id)
+        self.assertEqual(risk.status, RiskStatus.ASSESSED)
 
         # Risk Officer adds Basel type and residual scores
         self.client.force_authenticate(user=self.risk_officer)
@@ -1295,11 +1493,16 @@ class RiskIntegrationTests(RiskTestBase):
             },
         )
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+        risk.refresh_from_db()
+        self.assertEqual(risk.residual_risk_score, 4)
 
-        # Approve
+        # Approve (ASSESSED → ACTIVE)
         url = risk_action_url(risk_id, "approve")
         res = self.client.post(url)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+        risk.refresh_from_db()
+        self.assertEqual(risk.status, RiskStatus.ACTIVE)
+        self.assertIsNotNone(risk.validated_at)
 
         # Retire
         url = risk_action_url(risk_id, "retire")
@@ -1311,6 +1514,53 @@ class RiskIntegrationTests(RiskTestBase):
         risk = Risk.objects.get(id=risk_id)
         self.assertEqual(risk.status, RiskStatus.RETIRED)
         self.assertEqual(risk.retirement_reason, reason)
+
+    def test_full_risk_lifecycle_with_revision(self):
+        """Test DRAFT → ASSESSED → Send Back → ASSESSED → ACTIVE."""
+        risk_id = self.risk_draft.id
+        self.risk_draft.inherent_likelihood = 3
+        self.risk_draft.inherent_impact = 3
+        self.risk_draft.save()
+
+        # 1. Manager: Submit risk (DRAFT → ASSESSED)
+        self.client.force_authenticate(user=self.manager)
+        submit_url = risk_action_url(risk_id, "submit-for-review")
+        res = self.client.post(submit_url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # 2. Risk Officer: Send Back for Revision (ASSESSED → DRAFT)
+        self.client.force_authenticate(user=self.risk_officer)
+        send_back_url = risk_action_url(risk_id, "send-back")
+        send_back_reason = "Improve risk description clarity."
+        res = self.client.post(send_back_url, {"reason": send_back_reason})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_draft.refresh_from_db()
+        self.assertEqual(self.risk_draft.status, RiskStatus.DRAFT)
+        self.assertIn(send_back_reason, self.risk_draft.notes)
+
+        # 3. Manager: Update and Re-submit (DRAFT → ASSESSED)
+        self.client.force_authenticate(user=self.manager)
+        detail_url = risk_detail_url(risk_id)
+        self.client.patch(
+            detail_url, {"description": "New clear description."}
+        )
+        res = self.client.post(submit_url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_draft.refresh_from_db()
+        self.assertEqual(self.risk_draft.status, RiskStatus.ASSESSED)
+
+        # 4. Risk Officer: Approve (ASSESSED → ACTIVE)
+        self.risk_draft.residual_likelihood = 1
+        self.risk_draft.residual_impact = 1
+        self.risk_draft.basel_event_type = self.basel_internal_fraud
+        self.risk_draft.save()
+
+        self.client.force_authenticate(user=self.risk_officer)
+        approve_url = risk_action_url(risk_id, "approve")
+        res = self.client.post(approve_url)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_draft.refresh_from_db()
+        self.assertEqual(self.risk_draft.status, RiskStatus.ACTIVE)
 
     def test_reassessment_cycle(self):
         """Test ACTIVE → ASSESSED → ACTIVE reassessment workflow."""
