@@ -175,7 +175,7 @@ class RiskViewSet(viewsets.ModelViewSet):
         # For update, we rely on serializer validation + standard DRF update
         # Field-level security (read-only) should be handled in Serializer or Service if complex
         # For now, standard update:
-        partial = kwargs.pop("partial", False)
+        # partial = kwargs.pop("partial", False)
         instance = self.get_object()
 
         # Enforce Status-based field locking (Basic check)

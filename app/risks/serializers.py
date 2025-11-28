@@ -18,6 +18,7 @@ from references.models import (
 from users.serializers import UserNestedSerializer
 from incidents.serializers import IncidentListSerializer
 from measures.serializers import MeasureListSerializer
+from references.serializers import BusinessUnitSerializer
 
 
 # --- Action Payloads ---
@@ -70,9 +71,7 @@ class RiskDetailSerializer(serializers.ModelSerializer):
     owner = UserNestedSerializer(read_only=True)
     created_by = UserNestedSerializer(read_only=True)
     risk_category = RiskCategorySerializer(read_only=True)
-    business_unit = serializers.SlugRelatedField(
-        read_only=True, slug_field="name"
-    )  # Simple display
+    business_unit = BusinessUnitSerializer(read_only=True)
 
     # Computed
     inherent_risk_score = serializers.IntegerField(read_only=True)
