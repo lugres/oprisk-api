@@ -186,3 +186,65 @@ def can_user_add_comment(risk, user) -> bool:
     )
 
     return is_owner or is_creator or is_owner_mgr or is_creator_mgr
+
+
+def get_editable_fields(risk_status: str, user_role: str) -> set:
+    """
+    [PURE DOMAIN LOGIC]
+    Returns the set of fields that can be edited for a given status and role.
+    Any field NOT in this set is effectively Read-Only.
+    """
+    editable = set()
+
+    if risk_status == "DRAFT":
+        # In DRAFT, Managers and Risk Officers can edit core identification
+        # and inherent assessment fields.
+        if user_role in ["Manager", "Risk Officer"]:
+            editable.update(
+                {
+                    "title",
+                    "description",
+                    "risk_category",
+                    "basel_event_type",
+                    "business_unit",
+                    "business_process",
+                    "product",
+                    "owner",
+                    "inherent_likelihood",
+                    "inherent_impact",
+                }
+            )
+
+    elif risk_status == "ASSESSED":
+        # In ASSESSED, only the Risk Officer can edit, and primarily
+        # to complete the Residual assessment and classification.
+        if user_role == "Risk Officer":
+            editable.update(
+                {
+                    "residual_likelihood",
+                    "residual_impact",
+                    "basel_event_type",
+                    "risk_category",
+                    # RO might need to fix descriptions too?
+                    # For strict RCSA maybe not,
+                    # but let's allow context fixes for now.
+                    "title",
+                    "description",
+                    "business_unit",
+                    "business_process",
+                    "product",
+                }
+            )
+        # Managers cannot edit anything in ASSESSED (pending validation).
+
+    elif risk_status == "ACTIVE":
+        # In ACTIVE, the risk is locked.
+        # Changes require a Reassessment (Workflow Action).
+        # Therefore, NO fields are editable via standard PATCH.
+        pass
+
+    elif risk_status == "RETIRED":
+        # Retired risks are immutable historical records.
+        pass
+
+    return editable

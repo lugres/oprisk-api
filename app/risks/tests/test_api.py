@@ -601,34 +601,6 @@ class RiskWorkflowTests(RiskTestBase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Inherent risk scores required", str(res.data))
 
-    # this is flawed test (initially tried to violate not null constraint)
-    # risk_category presence is enforced by model
-    # basel cat submitting is covered by RiskBaselWorkflowTests
-    # def test_submit_without_risk_category_fails(self):
-    #     """Test submission fails without risk category."""
-    #     # Create risk without category (using direct DB to bypass validation)
-    #     risk_no_cat = Risk.objects.create(
-    #         title="Risk Without Category",
-    #         description="Test",
-    #         risk_category=self.fraud_category,  # Will clear below
-    #         status=RiskStatus.DRAFT,
-    #         created_by=self.manager,
-    #         owner=self.manager,
-    #         business_unit=self.bu_ops,
-    #         inherent_likelihood=3,
-    #         inherent_impact=3,
-    #     )
-    #     # Clear category
-    #     Risk.objects.filter(id=risk_no_cat.id).update(risk_category=None)
-    #     risk_no_cat.refresh_from_db()
-
-    #     self.client.force_authenticate(user=self.manager)
-    #     url = risk_action_url(risk_no_cat.id, "submit-for-review")
-    #     res = self.client.post(url)
-
-    #     self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-    #     self.assertIn("Risk category must be selected", str(res.data))
-
     def test_submit_with_only_likelihood_fails(self):
         """Test submission fails with partial inherent scores."""
         self.risk_draft.inherent_likelihood = 4
@@ -939,7 +911,7 @@ class RiskBaselWorkflowTests(RiskTestBase):
         # fraud_category allows internal/external fraud, NOT system_failure
         self.risk_draft.basel_event_type = self.basel_system_failure
         # Should fail at save time (model validation)
-        with self.assertRaises(ValidationError) as context:
+        with self.assertRaises(ValidationError) as _:
             self.risk_draft.save()
 
         # Set invalid Basel type (basel_system_failure is not for fraud)

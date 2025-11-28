@@ -102,7 +102,10 @@ def create_risk(
     """
     if not can_user_create_risk(user):
         raise RiskPermissionError(
-            "Only users with the Manager or Risk Officer role can create risks."
+            (
+                "Only users with the Manager or Risk Officer role"
+                " can create risks."
+            )
         )
 
     # Validate owner is in same BU (Business Rule)
@@ -146,6 +149,22 @@ def delete_risk(*, risk: Risk, user: User):
     risk.delete()
 
 
+@transaction.atomic
+def update_risk(*, risk: Risk, user: User, data: dict) -> Risk:
+    """
+    Service to update a risk instance with validated data.
+    """
+    # Note: Field-level permissions are handled by the serializer
+    # before reaching here. This service performs the persistence.
+
+    # Update fields
+    for field, value in data.items():
+        setattr(risk, field, value)
+
+    risk.save()
+    return risk
+
+
 # --- WORKFLOW ACTIONS ---
 
 
@@ -184,7 +203,7 @@ def submit_for_review(*, risk: Risk, user: User) -> Risk:
         not in risk.risk_category.basel_event_types.all()
     ):
         raise RiskTransitionError(
-            f"Basel event type is not valid for risk category."
+            "Basel event type is not valid for risk category."
         )
 
     risk.status = RiskStatus.ASSESSED
@@ -209,7 +228,7 @@ def approve(*, risk: Risk, user: User) -> Risk:
     # Check mapping consistency
     if risk.basel_event_type not in risk.risk_category.basel_event_types.all():
         raise RiskTransitionError(
-            f"Basel event type is not valid for risk category."
+            "Basel event type is not valid for risk category."
         )
 
     # Check score logic

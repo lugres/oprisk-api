@@ -10,7 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth import get_user_model
 
-from .models import Risk, RiskStatus
+from .models import Risk
 from . import serializers
 from . import services
 from .workflows import RiskTransitionError, RiskPermissionError
@@ -170,30 +170,39 @@ class RiskViewSet(viewsets.ModelViewSet):
             )
 
     def update(self, request, *args, **kwargs):
-        """Quick update() via DRF-way, to be refactored!"""
-
-        # For update, we rely on serializer validation + standard DRF update
-        # Field-level security (read-only) should be handled in Serializer or Service if complex
-        # For now, standard update:
-        # partial = kwargs.pop("partial", False)
+        """
+        Update a risk. Field-level security is enforced by the Serializer.
+        Execution is delegated to the Service layer.
+        """
+        partial = kwargs.pop("partial", False)
         instance = self.get_object()
 
-        # Enforce Status-based field locking (Basic check)
-        if instance.status in [RiskStatus.ACTIVE, RiskStatus.RETIRED]:
-            # Only Risk Officer can edit ACTIVE/RETIRED (and only specific fields generally)
-            # This matches test_cannot_edit_active_risk
-            # Ideally move this check to service or permissions
-            user = self._get_fully_loaded_user()
-            if not (
-                user.role.name == "Risk Officer"
-                and instance.status == RiskStatus.ACTIVE
-            ):
-                # If not RO on ACTIVE, block
-                # Actually test expects 200 OK but field NOT changed.
-                # This is best handled by the Serializer making fields read_only.
-                pass
+        # 1. Serializer determines what is valid and writable
+        # based on Domain rules
+        serializer = self.get_serializer(
+            instance, data=request.data, partial=partial
+        )
+        serializer.is_valid(raise_exception=True)
 
-        return super().update(request, *args, **kwargs)
+        # 2. Service layer executes the persistence
+        try:
+            updated_risk = services.update_risk(
+                risk=instance,
+                user=self._get_fully_loaded_user(),
+                data=serializer.validated_data,
+            )
+
+            # 3. Return response
+            return Response(
+                serializers.RiskDetailSerializer(
+                    updated_risk, context=self.get_serializer_context()
+                ).data,
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
 
     # --- Workflow Actions ---
 
@@ -215,7 +224,8 @@ class RiskViewSet(viewsets.ModelViewSet):
             )
         except RiskTransitionError as e:
             # Map logic errors to 400 or 403 based on context?
-            # Tests for transitions usually expect 400 for logic (e.g., missing scores)
+            # Tests for transitions usually expect 400 for logic
+            # (e.g., missing scores)
             # But 403 for permission (wrong role).
             # However, invalid role/transition combo is often 403 or 400.
             # Let's use 400 for Transition errors (logic) as per previous app.

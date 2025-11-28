@@ -4,9 +4,8 @@ Serializers for the risks API.
 
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from django.db.models import Q
 
-from .models import Risk, RiskStatus, RiskCategory
+from .models import Risk, RiskCategory
 from incidents.models import Incident
 from measures.models import Measure
 from references.models import (
@@ -19,6 +18,7 @@ from users.serializers import UserNestedSerializer
 from incidents.serializers import IncidentListSerializer
 from measures.serializers import MeasureListSerializer
 from references.serializers import BusinessUnitSerializer
+from .workflows import get_editable_fields, get_contextual_role_name
 
 
 # --- Action Payloads ---
@@ -169,8 +169,8 @@ class RiskCreateSerializer(serializers.ModelSerializer):
 
 class RiskUpdateSerializer(serializers.ModelSerializer):
     """
-    Field-level security enforced here via read_only_fields context logic
-    or explicit field definitions.
+    Field-level security enforced here dynamically in __init__, via Domain
+    helpers - get_editable_fields, get_contextual_role_name.
     """
 
     owner = serializers.PrimaryKeyRelatedField(
@@ -193,11 +193,34 @@ class RiskUpdateSerializer(serializers.ModelSerializer):
             "basel_event_type",
             "owner",
             "business_unit",  # BU is read-only in validation logic if needed
+            "business_process",
+            "product",
             "inherent_likelihood",
             "inherent_impact",
             "residual_likelihood",
             "residual_impact",
         ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # 1. Get Context
+        request = self.context.get("request")
+        instance = getattr(self, "instance", None)
+
+        if request and request.user and instance:
+            # 2. Determine Role (Application/Domain logic helper)
+            # ! request.user might not be fully loaded here depending on view,
+            # but get_contextual_role_nm handles the basic role check safely.
+            role = get_contextual_role_name(request.user)
+
+            # 3. Get Allowed Fields from Domain Layer
+            editable_fields = get_editable_fields(instance.status, role)
+
+            # 4. Enforce Read-Only on all other fields
+            for field_name in self.fields:
+                if field_name not in editable_fields:
+                    self.fields[field_name].read_only = True
 
     def validate(self, attrs):
         # Validation: Check Basel mapping if changing

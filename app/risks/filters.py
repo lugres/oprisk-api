@@ -49,8 +49,10 @@ class RiskFilter(django_filters.FilterSet):
         return queryset.filter(owner__id=value)
 
     def filter_inherent_score(self, queryset, name, value):
-        # Inherent score is computed property, so we filter by the raw fields multiplication?
-        # OR: Since we can't filter by property in DB, we use annotation or raw logic
+        # Inherent score is computed property, so we filter by the raw fields
+        # multiplication?
+        # OR: Since we can't filter by property in DB, we use annotation or
+        # raw logic
         # Simple approach: likelihood * impact >= value
         # Django F expressions allow this:
 
