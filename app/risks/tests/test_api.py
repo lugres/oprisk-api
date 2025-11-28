@@ -8,6 +8,7 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from django.utils import timezone
+from django.core.exceptions import ValidationError
 from rest_framework.test import APIClient
 from rest_framework import status
 
@@ -461,8 +462,8 @@ class RiskCRUDTests(RiskTestBase):
         url = risk_detail_url(self.risk_draft.id)
         res = self.client.delete(url)
 
-        # Should be blocked by queryset filter (404)
-        self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
+        # Should be blocked by permission check of service layer (delete_risk)
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
         self.assertTrue(Risk.objects.filter(id=self.risk_draft.id).exists())
 
 
@@ -656,7 +657,13 @@ class RiskWorkflowTests(RiskTestBase):
         res = self.client.post(url)
 
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertIn("Only Risk Officers can approve", str(res.data))
+        self.assertIn(
+            (
+                "Role 'Manager' is not authorized to move"
+                " from 'ASSESSED' to 'ACTIVE'."
+            ),
+            str(res.data),
+        )
 
     def test_approve_without_residual_scores_fails(self):
         """Test approval fails without residual risk scores."""
@@ -733,7 +740,7 @@ class RiskWorkflowTests(RiskTestBase):
         """Test Manager cannot send back risks."""
         self.client.force_authenticate(user=self.manager)
         url = risk_action_url(self.risk_assessed.id, "send-back")
-        payload = {"reason": "Test"}
+        payload = {"reason": "Long enough reason to pass validation"}
         res = self.client.post(url, payload)
 
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
@@ -923,11 +930,21 @@ class RiskBaselWorkflowTests(RiskTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
 
+    # test changed as clean()/save() provide data model integrity
     def test_submit_with_invalid_basel_type_fails(self):
         """Test submission fails with Basel type not mapped to category."""
         # fraud_category allows internal/external fraud, NOT system_failure
         self.risk_draft.basel_event_type = self.basel_system_failure
-        self.risk_draft.save()
+        # Should fail at save time (model validation)
+        with self.assertRaises(ValidationError) as context:
+            self.risk_draft.save()
+
+        # Set invalid Basel type (basel_system_failure is not for fraud)
+        # Use update() to bypass save/clean hook for test setup
+        Risk.objects.filter(id=self.risk_draft.id).update(
+            basel_event_type=self.basel_system_failure
+        )
+        self.risk_draft.refresh_from_db()  # Reload the instance
 
         self.client.force_authenticate(user=self.manager)
         url = risk_action_url(self.risk_draft.id, "submit-for-review")
@@ -948,12 +965,31 @@ class RiskBaselWorkflowTests(RiskTestBase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("Basel event type must be selected", str(res.data))
 
+    # test changed as clean()/save() provide data model integrity
     def test_approve_validates_basel_type_consistency(self):
         """Test approval validates Basel type is valid for category."""
-        # Set invalid Basel type
+        # Trying to set invalid Basel type
         self.risk_assessed.basel_event_type = self.basel_internal_fraud
-        # it_category doesn't allow internal_fraud
-        self.risk_assessed.save()
+        # BUT it_category doesn't allow internal_fraud - enforced by model
+        with self.assertRaises(ValidationError) as context:
+            self.risk_assessed.save()
+
+        self.assertIn("basel_event_type", context.exception.message_dict)
+        self.assertIn(
+            (
+                "'Internal Fraud' is not valid for risk category "
+                "'IT/Data/Cyber Risk'"
+            ),
+            str(context.exception.message_dict["basel_event_type"]),
+        )
+
+        # Trying to set invalid Basel type again, so Service Layer validation
+        # catches error (self.basel_internal_fraud is not for IT category)
+        #  Use update() to bypass save/clean hook for test setup
+        Risk.objects.filter(id=self.risk_assessed.id).update(
+            basel_event_type=self.basel_internal_fraud
+        )
+        self.risk_assessed.refresh_from_db()  # Reload the instance
 
         self.client.force_authenticate(user=self.risk_officer)
         url = risk_action_url(self.risk_assessed.id, "approve")

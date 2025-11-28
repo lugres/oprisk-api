@@ -54,7 +54,7 @@ def validate_transition(
         )
 
     if role_name not in allowed_roles:
-        raise RiskTransitionError(
+        raise RiskPermissionError(
             f"Role '{role_name}' is not authorized to move from "
             f"'{from_status_code}' to '{to_status_code}'."
         )

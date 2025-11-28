@@ -91,9 +91,9 @@ class RiskViewSet(viewsets.ModelViewSet):
             return serializers.RiskCommentSerializer
         if self.action in ["send_back", "retire"]:
             return serializers.RiskReasonSerializer
-        if self.action in ["link_to_incident", "unlink_incident"]:
+        if self.action in ["link_to_incident", "unlink_from_incident"]:
             return serializers.RiskLinkIncidentSerializer
-        if self.action in ["link_to_measure", "unlink_measure"]:
+        if self.action in ["link_to_measure", "unlink_from_measure"]:
             return serializers.RiskLinkMeasureSerializer
         return serializers.RiskDetailSerializer
 
@@ -138,13 +138,18 @@ class RiskViewSet(viewsets.ModelViewSet):
                 ).data,
                 status=status.HTTP_201_CREATED,
             )
-        except RiskPermissionError as e:
-            return Response(
-                {"error": str(e)}, status=status.HTTP_403_FORBIDDEN
+        except (RiskPermissionError, RiskTransitionError) as e:
+            err_status = (
+                status.HTTP_403_FORBIDDEN
+                if isinstance(e, RiskPermissionError)
+                else status.HTTP_400_BAD_REQUEST
             )
+            return Response({"error": str(e)}, status=err_status)
         except Exception as e:
+            # catch unexpected errors
             return Response(
-                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+                {"error": "An unexpected error occurred - " + str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
     def destroy(self, request, *args, **kwargs):
@@ -161,7 +166,7 @@ class RiskViewSet(viewsets.ModelViewSet):
             )  # Match test expectation
         except RiskTransitionError as e:
             return Response(
-                {"error": str(e)}, status=status.HTTP_403_FORBIDDEN
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
 
     def update(self, request, *args, **kwargs):
@@ -290,8 +295,13 @@ class RiskViewSet(viewsets.ModelViewSet):
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
 
-    @action(detail=True, methods=["post"], url_path="unlink-from-incident")
-    def unlink_incident(self, request, pk=None):
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="unlink-from-incident",
+        url_name="unlink-from-incident",
+    )
+    def unlink_from_incident(self, request, pk=None):
         """An action to unlink a risk from an incident."""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -324,8 +334,13 @@ class RiskViewSet(viewsets.ModelViewSet):
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
 
-    @action(detail=True, methods=["post"], url_path="unlink-from-measure")
-    def unlink_measure(self, request, pk=None):
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="unlink-from-measure",
+        url_name="unlink-from-measure",
+    )
+    def unlink_from_measure(self, request, pk=None):
         """An action to unlink a risk from a measure."""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)

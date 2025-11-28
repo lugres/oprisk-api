@@ -177,6 +177,16 @@ def submit_for_review(*, risk: Risk, user: User) -> Risk:
     if not risk.risk_category:
         raise RiskTransitionError("Risk category must be selected.")
 
+    # Check mapping consistency if basel is present
+    if (
+        risk.basel_event_type
+        and risk.basel_event_type
+        not in risk.risk_category.basel_event_types.all()
+    ):
+        raise RiskTransitionError(
+            f"Basel event type is not valid for risk category."
+        )
+
     risk.status = RiskStatus.ASSESSED
     risk.submitted_for_review_at = timezone.now()
     risk.submitted_by = user
