@@ -214,6 +214,14 @@ def get_editable_fields(risk_status: str, user_role: str) -> set:
                     "inherent_impact",
                 }
             )
+        # Risk Officer can add residual assessment for 'Workshop' mode
+        if user_role == "Risk Officer":
+            editable.update(
+                {
+                    "residual_likelihood",
+                    "residual_impact",
+                }
+            )
 
     elif risk_status == "ASSESSED":
         # In ASSESSED, only the Risk Officer can edit, and primarily

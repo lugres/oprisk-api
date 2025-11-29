@@ -313,28 +313,24 @@ class RiskQuerysetTests(RiskTestBase):
         self.assertEqual(res.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_employee_sees_limited_risks(self):
-        """Test Employee has limited visibility."""
+        """Test Employee has limited visibility (only risks in their BU)."""
         self.client.force_authenticate(user=self.employee)
         res = self.client.get(risk_list_url())
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        # Employee should have minimal access
-        # ! (exact rules depend on your implementation - see BRD! doc)
+        risk_ids = [r["id"] for r in res.data["results"]]
 
-    # ### Employee
+        # Should see risks in their BU (bu_ops)
+        self.assertIn(self.risk_draft.id, risk_ids)
+        self.assertIn(self.risk_active.id, risk_ids)
 
-    # **Definition:** General bank employee with read-only access to the risk
-    # register.
-
-    # **Permissions:**
-    # - View risks related to their business unit
-    # - View public risk reports and dashboards
-    # - Suggest new risks to their Manager (via email/chat, not in-app)
-
-    # **Responsibilities:**
-    # - Report risk-related observations to their Manager
-    # - Participate in RCSA workshops when invited
-    # - Follow risk mitigation procedures
+        # Should NOT see risks in other BU (bu_risk)
+        self.assertIn(
+            self.risk_other_bu.id, Risk.objects.values_list("id", flat=True)
+        )  # Exists in DB
+        self.assertNotIn(
+            self.risk_other_bu.id, risk_ids
+        )  # But hidden from view
 
     def test_unauthenticated_access_fails(self):
         """Test that unauthenticated requests are rejected."""
@@ -681,14 +677,24 @@ class RiskWorkflowTests(RiskTestBase):
         self.assertIn("Residual risk", str(res.data))
         self.assertIn("cannot exceed", str(res.data))
 
-    # ! Direct approval from DRAFT to ACTIVE should be allowed (workshop case)
-    # def test_approve_from_draft_fails(self):
-    #     """Test cannot approve directly from DRAFT status."""
-    #     self.client.force_authenticate(user=self.risk_officer)
-    #     url = risk_action_url(self.risk_draft.id, "approve")
-    #     res = self.client.post(url)
+    def test_risk_officer_can_approve_directly_from_draft(self):
+        """Test Risk Officer can move DRAFT -> ACTIVE (Workshop Mode)."""
+        # Setup: Risk Officer must fill ALL required fields in DRAFT first
+        self.risk_draft.inherent_likelihood = 5
+        self.risk_draft.inherent_impact = 5
+        self.risk_draft.residual_likelihood = 2
+        self.risk_draft.residual_impact = 2
+        self.risk_draft.basel_event_type = self.basel_internal_fraud
+        self.risk_draft.save()
 
-    #     self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_action_url(self.risk_draft.id, "approve")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.risk_draft.refresh_from_db()
+        self.assertEqual(self.risk_draft.status, RiskStatus.ACTIVE)
+        self.assertEqual(self.risk_draft.validated_by, self.risk_officer)
 
     def test_risk_officer_can_send_back_for_revision(self):
         """Test Risk Officer can move ASSESSED → DRAFT."""
@@ -1574,6 +1580,48 @@ class RiskIntegrationTests(RiskTestBase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.risk_draft.refresh_from_db()
         self.assertEqual(self.risk_draft.status, RiskStatus.ACTIVE)
+
+    def test_workshop_mode_lifecycle(self):
+        """Test 'Workshop Mode': Risk Officer creates and activates a risk."""
+        self.client.force_authenticate(user=self.risk_officer)
+
+        # 1. Create Risk (DRAFT)
+        payload = {
+            "title": "Workshop Risk",
+            "description": "Identified during Q3 Workshop",
+            "risk_category": self.fraud_category.id,
+            "business_unit": self.bu_ops.id,
+            "owner": self.owner_user.id,
+            "inherent_likelihood": 4,
+            "inherent_impact": 4,
+        }
+        res = self.client.post(risk_list_url(), payload)
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        risk_id = res.data["id"]
+
+        # 2. Update with Residual Scores & Basel Data (Preparation)
+        # In a real UI, this might happen in the create step
+        # or a patch immediately after
+        detail_url = risk_detail_url(risk_id)
+        patch_payload = {
+            "residual_likelihood": 2,
+            "residual_impact": 2,
+            "basel_event_type": self.basel_internal_fraud.id,
+        }
+        res = self.client.patch(detail_url, patch_payload)
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # 3. Direct Approval (DRAFT -> ACTIVE)
+        approve_url = risk_action_url(risk_id, "approve")
+        res = self.client.post(approve_url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Verify Final State
+        risk = Risk.objects.get(id=risk_id)
+        self.assertEqual(risk.status, RiskStatus.ACTIVE)
+        self.assertEqual(risk.inherent_risk_score, 16)
+        self.assertEqual(risk.residual_risk_score, 4)
 
     def test_reassessment_cycle(self):
         """Test ACTIVE → ASSESSED → ACTIVE reassessment workflow."""
