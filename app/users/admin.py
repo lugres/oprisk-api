@@ -12,6 +12,9 @@ from users.models import User
 class UserAdmin(BaseUserAdmin):
     """Define the admin pages for users."""
 
+    # This line is REQUIRED to support autocomplete_fields in RiskAdmin
+    search_fields = ("email", "first_name", "last_name")
+
     ordering = ["id"]
     list_display = ["email", "full_name"]
     fieldsets = (

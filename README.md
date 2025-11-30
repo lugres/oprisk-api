@@ -2,6 +2,10 @@
 
 This repository contains the backend API for a custom-built [Operational Risk Management (ORM)](https://jfrog.com/learn/devsecops/operational-risk-management/) platform. Developed with Django and Django Rest Framework, this system provides a robust, secure, and maintainable foundation for managing the complete operational risk lifecycle: Incidents (Loss Events), Risks, Controls, Measures, and Key Risk Indicators (KRIs).
 
+In simple terms, **Incidents** module tracks "*what went wrong and why*" and **Measures** define "*how we fix it*", "_who is responsible_" and "_when it will be completed_". 
+The **Risks** module describes "_what could potentially go wrong_" and links the elements together.
+**Controls** specify "_how we prevent those potential issues_", while **KRIs** consistently measure "_room's temperature_" - early signals indicating that risk levels are rising.
+
 This project is built on a modular monolithic Django DRF backend, following Domain-Driven Design principles and emphasizing a clean **Service Layer architecture** within each module to separate complex business logic from the interface. This layered design ensures the platform is testable, maintainable, and can be extended to future modules, such as Risks or Controls, with clarity. Additionally, this approach minimizes dependency on Django REST Framework, allowing for the portability of service and domain layers to other frameworks if needed.
 
 This project is based on [Oprisk database project](https://github.com/lugres/oprisk-database) - a structured relational database that enables risk managers to record and analyze incidents (loss events), define and assess risks, manage controls and mitigation measures, and monitor key risk indicators (KRIs).
@@ -13,26 +17,38 @@ This platform is designed to be the single source of truth for all operational r
 ### Planned Modules
 
 The architecture is designed to support the progressive addition of all core ORM entities:
-* **Incidents:** A system for registering and processing operational risk incidents (loss events), which features an advanced, role-based workflow.
-* **Risks:** A central register of operational risks, with inherent/residual assessments.
-* **Controls:** A library of controls to mitigate risks.
-* **Measures:** A log of corrective actions, with deadlines and owners, linked to Incidents or Risks.
-* **Key Risk Indicators (KRIs):** A system for monitoring metrics against defined thresholds.
-* **Linkage:** Full many-to-many relationships between all entities (e.g., `incident_risk`, `risk_control`).
+* **Incidents:** A system for registering and processing operational risk incidents (loss events), which features an advanced, role-based workflow. ✔️
+* **Risks:** A central register of operational risks, with inherent/residual assessments. ✔️
+* **Controls:** A library of controls to mitigate risks. 🔜
+* **Measures:** A log of corrective actions, with deadlines and owners, linked to Incidents or Risks. ✔️
+* **Key Risk Indicators (KRIs):** A system for monitoring metrics against defined thresholds. 🔜
+* **Linkage:** Full many-to-many relationships between all entities (e.g., `incident_risk`, `risk_control`). ✔️
 
-### Incidents Management Module
+Here’s a simplified entity relationship diagram with the main actors, their actions, and their interconnections:
+![ER Diagram](diagram.png)
+
+### ⛈️ Incidents Management Module
 
 The first-built module manages the complete lifecycle of operational risk events. Its logic is governed by a sophisticated workflow engine that includes:
 * A role-based, multi-stage state machine (e.g., `DRAFT` -> `PENDING_REVIEW` -> `VALIDATION`).
 * Data-driven rules for transitions, required fields, and field-level editability.
 * Automatic, state-based SLA timer calculation.
-* Asynchronous, rule-based notification routing for awareness (e.g., alerting the Fraud team immediately once Fraud incident is registered).
+* Asynchronous, rule-based notification routing for awareness (e.g., alerting the Fraud team immediately once Fraud incident is registered), etc.
 
-### Measures & Corrective Actions Module (In Development)
+### ☔️ Measures & ✅ Corrective Actions Module
 
-This module manages the lifecycle of corrective and preventive actions. Measures can be linked to Incidents (and later, Risks) to track remediation. 
+This module manages the lifecycle of corrective and preventive actions. Measures can be linked to Incidents and Risks to track remediation. 
 * It features its own auditable, four-stage workflow (OPEN → IN_PROGRESS → PENDING_REVIEW → COMPLETED), ensuring that actions are verified by a Risk Officer before closure. 
 * The API provides dedicated endpoints for state transitions, linking, and logging evidence, with dynamic permissions that lock key fields (like deadline) once work is in progress.
+
+### ⚠️ ⚡️ 🔍 Risks Module (RCSA)
+
+The Risks module implements a robust **Risk and Control Self-Assessment (RCSA)** engine, serving as the central register for operational risks. It features a strict **4-state workflow** (`DRAFT` → `ASSESSED` → `ACTIVE` → `RETIRED`) that enforces segregation of duties between **Managers** (Risk Owners) and **Risk Officers** (Validators). Key capabilities include:
+* **Workflow Engine:** Explicit validation checkpoints where Risk Officers must approve inherent/residual scores and Basel classifications before a risk becomes Active.
+* **Dual Taxonomy:** Supports simplified internal risk categories mapped to regulatory **Basel Event Types**.
+* **Contextual Logic:** Dynamic field-level security that locks specific fields based on the risk's current status and the user's role.
+* **Scoring Engine:** Automated calculation of Inherent and Residual risk scores based on Likelihood × Impact matrices.
+* **Interconnectivity:** Bi-directional linking with **Incidents** (realized risks), **Measures** (corrective risk mitigations) and **Controls** (preventive mitigations, to be developed).
 
 ## Key Features - Incidents Module
 
@@ -48,7 +64,7 @@ This module manages the lifecycle of corrective and preventive actions. Measures
 
 This project strictly follows a 3-layer architectural pattern to manage complexity:
 
-1.  **Interface Layer (Views):** Thin `ViewSet`s responsible for HTTP handling, authentication, and permission checks.
+1.  **Interface Layer (Views):** Thin `ViewSet` is responsible for HTTP handling, authentication, and permission checks.
 2.  **Application Layer (Services):** Orchestrates business tasks. This is where multiple components are coordinated (e.g., "submit an incident" means *validating fields*, *running workflow*, *setting SLA*, and *assigning a user*).
 3.  **Domain Layer (Workflow):** Pure, isolated Python modules that contain the core business rules (e.g., `is_transition_allowed?`).
 
@@ -71,15 +87,21 @@ This project is a monolithic Django application, containerized with Docker, and 
 
 For a deeper dive into the system's design and business rules, please see the following documents:
 
-* **[Project Architecture (explained based on Incident module)](./docs/architecture.md)**: A detailed breakdown of the 3-layer architectural pattern, permission models, and notification system.
+* **[Project Architecture (explained based on Incidents module)](./docs/architecture.md)**: A detailed breakdown of the 3-layer architectural pattern, permission models, and notification system.
 
 ### Documentation - Incidents module
 
-* **[Incident Workflow Rules](./docs/incident_workflow_rules.md)**: A complete specification of the incident state machine, SLA logic, and dynamic field rules.
-* **[Incident API Contracts](./docs/incident_api_contracts.md)**: High-level documentation for the main Incident API endpoints and workflow actions.
+* **[Incidents Workflow Rules](./docs/incident_workflow_rules.md)**: A complete specification of the incident state machine, SLA logic, and dynamic field rules.
+* **[Incidents API Contracts](./docs/incident_api_contracts.md)**: High-level documentation for the main Incidents API endpoints and workflow actions.
 
 ### Documentation - Measures module
 
-* **[Measure Workflow Rules](./docs/measure_workflow_rules.md)**: A complete specification of the measure state machine, SLA logic, and dynamic field rules.
-* **[Measure API Contracts](./docs/measure_api_contracts.md)**: High-level documentation for the main Measure API endpoints and workflow actions.
-* **[Architecture Decision Record (ADR) document for permission enforcement strategy in Measures](./docs/architectural_decision_records/001_adr_measures_permissions.md)**: High-level documentation for the main Measure API endpoints and workflow actions.
+* **[Measures Workflow Rules](./docs/measure_workflow_rules.md)**: A complete specification of the measure state machine, SLA logic, and dynamic field rules.
+* **[Measures API Contracts](./docs/measure_api_contracts.md)**: High-level documentation for the main Measures API endpoints and workflow actions.
+* **[Architecture Decision Record (ADR) document for permission enforcement strategy in Measures](./docs/architectural_decision_records/001_adr_measures_permissions.md)**: Outlines how a robust permission enforcement mechanism is implemented in the Measures module within Service-Layer Gateway Pattern, and explains why DRF-native permission classes were not used.
+
+### Documentation - Risks module
+
+* **[Risks Workflow Rules](./docs/risks_workflow_rules.md)**: A complete specification of the risk state machine, SLA logic, and dynamic field rules.
+* **[Risks API Contracts](./docs/risks_api_contracts.md)**: High-level documentation for the main Risk API endpoints and workflow actions.
+* **[Business Requirements Document (BRD) for the Risks module](./docs/business_requirements_documents/risk_workflow_design_specs.md)**: Presents an analysis of different options considered for a Risk workflow model, and explains what was finally selected and why.
