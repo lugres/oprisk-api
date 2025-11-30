@@ -49,6 +49,21 @@ class RiskViewSet(viewsets.ModelViewSet):
         except get_user_model().DoesNotExist:
             return None
 
+    def _get_response_serializer(self, instance):
+        """
+        Helper to return a RiskDetailSerializer with full contextual data.
+        Ensures create/update/actions return the same rich data as retrieve.
+        """
+        context = self.get_serializer_context()
+        user = self._get_fully_loaded_user()
+
+        # Populate context with transitions and permissions
+        if user:
+            contextual_data = services.get_risk_context(instance, user)
+            context.update(contextual_data)
+
+        return serializers.RiskDetailSerializer(instance, context=context)
+
     def get_queryset(self):
         """
         Implement data segregation based on user role.
@@ -111,14 +126,8 @@ class RiskViewSet(viewsets.ModelViewSet):
         Retrieve a single risk with contextual data.
         """
         instance = self.get_object()
-        context = self.get_serializer_context()
-
-        user = self._get_fully_loaded_user()
-        if user:
-            contextual_data = services.get_risk_context(instance, user)
-            context.update(contextual_data)
-
-        serializer = self.get_serializer(instance, context=context)
+        # Use the new helper to ensure consistency
+        serializer = self._get_response_serializer(instance)
         return Response(serializer.data)
 
     def create(self, request, *args, **kwargs):
@@ -132,10 +141,9 @@ class RiskViewSet(viewsets.ModelViewSet):
             risk = services.create_risk(
                 user=self._get_fully_loaded_user(), **serializer.validated_data
             )
+            # Use helper to return full context in response
             return Response(
-                serializers.RiskDetailSerializer(
-                    risk, context=self.get_serializer_context()
-                ).data,
+                self._get_response_serializer(risk).data,
                 status=status.HTTP_201_CREATED,
             )
         except (RiskPermissionError, RiskTransitionError) as e:
@@ -194,9 +202,7 @@ class RiskViewSet(viewsets.ModelViewSet):
 
             # 3. Return response
             return Response(
-                serializers.RiskDetailSerializer(
-                    updated_risk, context=self.get_serializer_context()
-                ).data,
+                self._get_response_serializer(updated_risk).data,
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
@@ -213,9 +219,7 @@ class RiskViewSet(viewsets.ModelViewSet):
                 risk=risk, user=self._get_fully_loaded_user(), **kwargs
             )
             return Response(
-                serializers.RiskDetailSerializer(
-                    updated_risk, context=self.get_serializer_context()
-                ).data,
+                self._get_response_serializer(updated_risk).data,
                 status=status.HTTP_200_OK,
             )
         except RiskPermissionError as e:

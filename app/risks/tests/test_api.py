@@ -1493,6 +1493,11 @@ class RiskIntegrationTests(RiskTestBase):
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         risk_id = res.data["id"]
 
+        # VERIFY CONTEXT: DRAFT risk should allow 'submit-for-review'
+        self.assertIn("available_transitions", res.data)
+        actions = [t["action"] for t in res.data["available_transitions"]]
+        self.assertIn("submit-for-review", actions)
+
         # Submit for review (DRAFT → ASSESSED)
         url = risk_action_url(risk_id, "submit-for-review")
         res = self.client.post(url)
@@ -1500,7 +1505,12 @@ class RiskIntegrationTests(RiskTestBase):
         risk = Risk.objects.get(id=risk_id)
         self.assertEqual(risk.status, RiskStatus.ASSESSED)
 
-        # Risk Officer adds Basel type and residual scores
+        # VERIFY CONTEXT: Manager should see NO transitions in ASSESSED
+        # (Only RO can approve/reject)
+        actions = [t["action"] for t in res.data["available_transitions"]]
+        self.assertEqual(actions, [])
+
+        # Risk Officer adds Basel type and residual scores (PATCH)
         self.client.force_authenticate(user=self.risk_officer)
         url = risk_detail_url(risk_id)
         res = self.client.patch(
@@ -1515,6 +1525,12 @@ class RiskIntegrationTests(RiskTestBase):
         risk.refresh_from_db()
         self.assertEqual(risk.residual_risk_score, 4)
 
+        # VERIFY CONTEXT: RO should see 'approve' and 'send-back'
+        # (Patch response must include context too!)
+        actions = [t["action"] for t in res.data["available_transitions"]]
+        self.assertIn("approve", actions)
+        self.assertIn("send-back", actions)
+
         # Approve (ASSESSED → ACTIVE)
         url = risk_action_url(risk_id, "approve")
         res = self.client.post(url)
@@ -1522,6 +1538,11 @@ class RiskIntegrationTests(RiskTestBase):
         risk.refresh_from_db()
         self.assertEqual(risk.status, RiskStatus.ACTIVE)
         self.assertIsNotNone(risk.validated_at)
+
+        # VERIFY CONTEXT: Active risk should allow 'request-reassessment' and 'retire'
+        actions = [t["action"] for t in res.data["available_transitions"]]
+        self.assertIn("request-reassessment", actions)
+        self.assertIn("retire", actions)
 
         # Retire
         url = risk_action_url(risk_id, "retire")
@@ -1533,6 +1554,10 @@ class RiskIntegrationTests(RiskTestBase):
         risk = Risk.objects.get(id=risk_id)
         self.assertEqual(risk.status, RiskStatus.RETIRED)
         self.assertEqual(risk.retirement_reason, reason)
+
+        # VERIFY CONTEXT: Retired risk has NO transitions
+        actions = [t["action"] for t in res.data["available_transitions"]]
+        self.assertEqual(actions, [])
 
     def test_full_risk_lifecycle_with_revision(self):
         """Test DRAFT → ASSESSED → Send Back → ASSESSED → ACTIVE."""

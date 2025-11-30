@@ -123,15 +123,19 @@ class RiskDetailSerializer(serializers.ModelSerializer):
         ]
 
     def get_available_transitions(self, obj):
+        """List available transitions for a risk."""
         return self.context.get("available_transitions", [])
 
     def get_permissions(self, obj):
+        """List available permissions for a risk."""
         return self.context.get("permissions", {})
 
     def get_linked_incidents(self, obj):
+        """Display linked incidents."""
         return IncidentListSerializer(obj.incidents.all(), many=True).data
 
     def get_linked_measures(self, obj):
+        """Display linked measures."""
         return MeasureListSerializer(obj.measures.all(), many=True).data
 
 
