@@ -34,13 +34,13 @@ This document analyzes workflow state machine options for the Risk entity lifecy
 ---
 
 ## Table of Contents
-1. [Problem Statement](#problem-statement)
-2. [Background & Context](#background--context)
-3. [Evaluation Criteria](#evaluation-criteria)
-4. [Workflow Options Analysis](#workflow-options-analysis)
-5. [RCSA Campaign Management Analysis](#rcsa-campaign-management-analysis)
-6. [Decision & Recommendation](#decision--recommendation)
-7. [Implementation Guidelines](#implementation-guidelines)
+1. [Problem Statement](#1-problem-statement)
+2. [Background & Context](#2-background--context)
+3. [Evaluation Criteria](#3-evaluation-criteria)
+4. [Workflow Options Analysis](#4-workflow-options-analysis)
+5. [RCSA Campaign Management Analysis](#5-rcsa-campaign-management-analysis)
+6. [Decision & Recommendation](#6-decision--recommendation)
+7. [Implementation Guidelines](#7-implementation-guidelines)
 8. [Appendix: Role Definitions](#appendix-role-definitions)
 
 ---
