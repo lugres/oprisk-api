@@ -1539,7 +1539,8 @@ class RiskIntegrationTests(RiskTestBase):
         self.assertEqual(risk.status, RiskStatus.ACTIVE)
         self.assertIsNotNone(risk.validated_at)
 
-        # VERIFY CONTEXT: Active risk should allow 'request-reassessment' and 'retire'
+        # VERIFY CONTEXT: Active risk should allow 'request-reassessment'
+        # and 'retire'
         actions = [t["action"] for t in res.data["available_transitions"]]
         self.assertIn("request-reassessment", actions)
         self.assertIn("retire", actions)
