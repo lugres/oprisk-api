@@ -193,7 +193,12 @@ class Risk(TimestampedModel, OwnedModel):
         related_name="risks",
         blank=True,
     )
-    # controls = models.ManyToManyField(Control, through="RiskControl")
+    controls = models.ManyToManyField(
+        "controls.Control",
+        through="RiskControl",
+        related_name="risks",
+        blank=True,
+    )
 
     # --- Data Integrity Validation ---
 
@@ -268,13 +273,32 @@ class RiskMeasure(models.Model):
         unique_together = ("risk", "measure")
         verbose_name = "Risk to Measure Link"
 
-    # !!- Controls to be added later, maybe to Control model if in separate app
-    # class RiskControl(models.Model):
-    #     """Links Risks to Controls."""
 
-    #     risk = models.ForeignKey(Risk, on_delete=models.CASCADE)
-    #     control = models.ForeignKey(Control, on_delete=models.CASCADE)
+class RiskControl(TimestampedModel):
+    """
+    Links Risks to Controls.
+    Represents the application of a library Control to a specific Risk.
+    """
 
-    #     class Meta:
-    #         unique_together = ("risk", "control")
-    #         verbose_name = "Risk to Control Link"
+    risk = models.ForeignKey(Risk, on_delete=models.CASCADE)
+    control = models.ForeignKey("controls.Control", on_delete=models.PROTECT)
+
+    # Audit / Justification
+    notes = models.TextField(
+        blank=True,
+        help_text=_(
+            "Why is this control applied to this risk? (Mapping logic)"
+        ),
+    )
+
+    # Track who created the link
+    # (separate from who created the Risk or Control)
+    linked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="risk_links",
+    )
+
+    class Meta:
+        unique_together = ("risk", "control")
+        verbose_name = "Risk to Control Link"
