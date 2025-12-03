@@ -105,3 +105,8 @@ For a deeper dive into the system's design and business rules, please see the fo
 * **[Risks Workflow Rules](./docs/risks_workflow_rules.md)**: A complete specification of the risk state machine, SLA logic, and dynamic field rules.
 * **[Risks API Contracts](./docs/risks_api_contracts.md)**: High-level documentation for the main Risk API endpoints and workflow actions.
 * **[Business Requirements Document (BRD) for the Risks module](./docs/business_requirements_documents/risk_workflow_design_specs.md)**: Presents an analysis of different options considered for a Risk workflow model, and explains what was finally selected and why.
+
+### Documentation - Controls module
+
+* **[Business Requirements Document (BRD) for the Controls module, detailed analysis](./docs/business_requirements_documents/controls_design_specs_detailed.md)**: Presents an analysis of different options considered for the Controls app, including code organization, workflows, data models, and explains what was finally selected and why.
+* **[Business Requirements Document (BRD) for the Controls module, Executive Summary](./docs/business_requirements_documents/controls_design_specs_exec_summary.md)**: Presents a clear development path to follow for the Controls app; based on the detailed analysis of pros and cons in the previous BRD.
