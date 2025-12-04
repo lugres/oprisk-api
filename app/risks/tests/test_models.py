@@ -21,9 +21,11 @@ from risks.models import (
     RiskCategoryToBaselEventType,
     IncidentRisk,
     RiskMeasure,
+    RiskControl,
 )
 from incidents.models import Incident, IncidentStatusRef
 from measures.models import Measure
+from controls.models import Control
 from references.models import (
     BaselEventType,
     BusinessUnit,
@@ -486,6 +488,13 @@ class RiskRelationshipTests(TestCase):
             responsible=cls.user,
             # business_unit=cls.bu,
         )
+        cls.control = Control.objects.create(
+            title="Install Firewalls and DDoS sensors",
+            description="NOKIA firewalls here",
+            business_unit=cls.bu,
+            owner=cls.user,
+            created_by=cls.user,
+        )
 
     def test_incident_risk_linkage(self):
         """Test M2M linking between Risk and Incident."""
@@ -514,6 +523,28 @@ class RiskRelationshipTests(TestCase):
         # Test RiskMeasure model integrity
         link = RiskMeasure.objects.get(risk=self.risk_a, measure=self.measure)
         self.assertIsNotNone(link)
+
+    def test_risk_control_linkage(self):
+        """Test M2M linking between Risk and Control."""
+        self.risk_a.controls.add(
+            self.control,
+            through_defaults={
+                "notes": "Mitigates root cause via IT tools",
+                "linked_by": self.user,
+            },
+        )
+
+        # Test risk has control
+        self.assertIn(self.control, self.risk_a.controls.all())
+
+        # Test Control has related risk (uses related_name='risks')
+        self.assertIn(self.risk_a, self.control.risks.all())
+
+        # Test RiskControl model integrity - both 'link' work
+        link = RiskControl.objects.get(risk=self.risk_a, control=self.control)
+        # link = self.risk_a.riskcontrol_set.first()
+        self.assertIsNotNone(link)
+        self.assertEqual(link.notes, "Mitigates root cause via IT tools")
 
     def test_m2m_unique_constraint(self):
         """Test the unique_together constraint on the link tables."""
@@ -547,6 +578,44 @@ class RiskRelationshipTests(TestCase):
         self.assertEqual(self.incident.risks.count(), 2)
         self.assertIn(self.risk_a, self.incident.risks.all())
         self.assertIn(self.risk_b, self.incident.risks.all())
+
+    def test_risk_can_link_to_multiple_controls(self):
+        """Test that one risk can link to multiple controls."""
+        control2 = Control.objects.create(
+            title="Sign up for CloudFlare service",
+            description="CloudFlare service",
+            business_unit=self.bu,
+            owner=self.user,
+            created_by=self.user,
+        )
+
+        self.risk_a.controls.add(
+            self.control,
+            control2,
+            through_defaults={
+                "notes": "Mitigates root cause with CloudFlare",
+                "linked_by": self.user,
+            },
+        )
+
+        self.assertEqual(self.risk_a.controls.count(), 2)
+        self.assertIn(self.control, self.risk_a.controls.all())
+        self.assertIn(control2, self.risk_a.controls.all())
+
+    def test_control_can_link_to_multiple_risks(self):
+        """Test that one control can link to multiple risks."""
+        self.control.risks.add(
+            self.risk_a,
+            self.risk_b,
+            through_defaults={
+                "notes": "Mitigates root cause",
+                "linked_by": self.user,
+            },
+        )
+
+        self.assertEqual(self.control.risks.count(), 2)
+        self.assertIn(self.risk_a, self.control.risks.all())
+        self.assertIn(self.risk_b, self.control.risks.all())
 
 
 class RiskEdgeCaseTests(TestCase):
