@@ -1,7 +1,7 @@
 """
 Tests for the models in the measures app.
 Focuses on data integrity, field validation, and model behavior.
-Does NOT test business logic (see test_workflows.py and test_services.py).
+Does NOT test business logic (see test_api.py).
 """
 
 from django.test import TestCase
@@ -9,11 +9,6 @@ from django.core.exceptions import ValidationError
 from django.db.utils import IntegrityError
 from django.contrib.auth import get_user_model
 
-# from datetime import date
-# from django.utils import timezone
-# from unittest.mock import MagicMock
-
-# Assuming these models exist and are imported correctly
 from risks.models import (
     Risk,
     RiskStatus,
@@ -545,6 +540,83 @@ class RiskRelationshipTests(TestCase):
         # link = self.risk_a.riskcontrol_set.first()
         self.assertIsNotNone(link)
         self.assertEqual(link.notes, "Mitigates root cause via IT tools")
+
+        # RiskControl link has timestamp fields.
+        self.assertIsNotNone(link.created_at)
+        self.assertIsNotNone(link.updated_at)
+
+    def test_risk_control_link_requires_linked_by(self):
+        """Test that RiskControl link requires linked_by user."""
+        with self.assertRaises(IntegrityError):
+            RiskControl.objects.create(
+                risk=self.risk_a,
+                control=self.control,
+                # Missing linked_by
+            )
+
+    def test_risk_control_on_delete_cascade_for_risk(self):
+        """Test that deleting risk cascades to RiskControl links."""
+        link = RiskControl.objects.create(
+            risk=self.risk_a,
+            control=self.control,
+            linked_by=self.user,
+        )
+        link_id = link.id
+
+        self.risk_a.delete()
+
+        # Link should be deleted
+        self.assertFalse(RiskControl.objects.filter(id=link_id).exists())
+        # Control should still exist
+        self.assertTrue(Control.objects.filter(id=self.control.id).exists())
+
+    def test_risk_control_on_delete_protect_for_control(self):
+        """Test that deleting control with links is blocked (PROTECT)."""
+        RiskControl.objects.create(
+            risk=self.risk_a,
+            control=self.control,
+            linked_by=self.user,
+        )
+
+        with self.assertRaises(IntegrityError):
+            self.control.delete()
+
+        # Both should still exist
+        self.assertTrue(Control.objects.filter(id=self.control.id).exists())
+        self.assertTrue(Risk.objects.filter(id=self.risk_a.id).exists())
+
+    def test_risk_control_on_delete_protect_for_linked_by_user(self):
+        """Test that deleting user who linked is blocked (PROTECT)."""
+        linker = User.objects.create_user(
+            email="linker2@example.com",
+            password="password123",
+        )
+        RiskControl.objects.create(
+            risk=self.risk_a,
+            control=self.control,
+            linked_by=linker,
+        )
+
+        with self.assertRaises(IntegrityError):
+            linker.delete()
+
+    def test_risk_control_unique_constraint_enforced(self):
+        """Test that unique_together prevents duplicate risk-control links."""
+        RiskControl.objects.create(
+            risk=self.risk_a,
+            control=self.control,
+            linked_by=self.user,
+            notes="First link",
+        )
+
+        # Attempt to create duplicate
+        with self.assertRaises(IntegrityError):
+            RiskControl.objects.create(
+                risk=self.risk_a,
+                control=self.control,
+                linked_by=self.user,
+                notes="Duplicate attempt",
+            )
 
     def test_m2m_unique_constraint(self):
         """Test the unique_together constraint on the link tables."""

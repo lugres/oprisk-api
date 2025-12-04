@@ -1,5 +1,9 @@
 """
 Tests for the models in the controls app.
+Focused on data integrity (constraints, cascades),
+field validation (required fields, ranges, max lengths, enums),
+and model behavior (defaults, timestamps, nullability).
+Business logic will be in the test_api.py.
 """
 
 from django.test import TestCase
@@ -76,6 +80,46 @@ class ControlModelTest(TestCase):
         self.assertEqual(simple_control.control_nature, ControlNature.MANUAL)
         self.assertIsNone(simple_control.effectiveness)
 
+    def test_control_with_no_business_process_allowed(self):
+        """Test that business_process is optional (nullable)."""
+        control = Control.objects.create(
+            title="Generic Control",
+            description="Not process-specific",
+            business_unit=self.bu,
+            owner=self.owner,
+            created_by=self.risk_officer,
+            control_frequency=ControlFrequency.DAILY,
+        )
+        self.assertIsNone(control.business_process)
+
+    def test_timestamped_fields_auto_populate(self):
+        """Test that TimestampedModel fields are auto-populated."""
+        control = Control.objects.create(
+            title="Timestamped Control",
+            description="Testing timestamps",
+            business_unit=self.bu,
+            owner=self.owner,
+            created_by=self.risk_officer,
+        )
+
+        self.assertIsNotNone(control.created_at)
+        self.assertIsNotNone(control.updated_at)
+
+        # On creation, timestamps should be very close (within 1 second)
+        time_diff = abs(
+            (control.updated_at - control.created_at).total_seconds()
+        )
+        self.assertLess(time_diff, 1.0)
+
+        # Update and verify updated_at changes
+        original_created = control.created_at
+        original_updated = control.updated_at
+        control.description = "Updated description"
+        control.save()
+
+        self.assertEqual(control.created_at, original_created)
+        self.assertGreater(control.updated_at, original_updated)
+
     # --- Validation Tests ---
 
     def test_effectiveness_score_validation(self):
@@ -116,6 +160,77 @@ class ControlModelTest(TestCase):
         self.assertIn("description", errors)
         self.assertIn("business_unit", errors)
         self.assertIn("owner", errors)
+
+    def test_control_title_max_length(self):
+        """Test that title enforces max_length=255."""
+        long_title = "A" * 256
+        control = Control(
+            title=long_title,
+            description="Test",
+            business_unit=self.bu,
+            owner=self.owner,
+            created_by=self.risk_officer,
+        )
+        with self.assertRaises(ValidationError) as cm:
+            control.full_clean()
+        self.assertIn("title", cm.exception.message_dict)
+
+    def test_reference_doc_max_length(self):
+        """Test that reference_doc enforces max_length=255."""
+        long_ref = "http://example.com/" + "A" * 250
+        control = Control(
+            title="Test Control",
+            description="Test",
+            reference_doc=long_ref,
+            business_unit=self.bu,
+            owner=self.owner,
+            created_by=self.risk_officer,
+        )
+        with self.assertRaises(ValidationError) as cm:
+            control.full_clean()
+        self.assertIn("reference_doc", cm.exception.message_dict)
+
+    def test_control_type_choices_are_valid(self):
+        """Test that all ControlType choices work."""
+        for control_type, _ in ControlType.choices:
+            control = Control.objects.create(
+                title=f"Control {control_type}",
+                description=f"Testing {control_type}",
+                control_type=control_type,
+                business_unit=self.bu,
+                owner=self.owner,
+                created_by=self.risk_officer,
+            )
+            self.assertEqual(control.control_type, control_type)
+            control.delete()
+
+    def test_control_nature_choices_are_valid(self):
+        """Test that all ControlNature choices work."""
+        for nature, _ in ControlNature.choices:
+            control = Control.objects.create(
+                title=f"Control {nature}",
+                description=f"Testing {nature}",
+                control_nature=nature,
+                business_unit=self.bu,
+                owner=self.owner,
+                created_by=self.risk_officer,
+            )
+            self.assertEqual(control.control_nature, nature)
+            control.delete()
+
+    def test_control_frequency_choices_are_valid(self):
+        """Test that all ControlFrequency choices work."""
+        for freq, _ in ControlFrequency.choices:
+            control = Control.objects.create(
+                title=f"Control {freq}",
+                description=f"Testing {freq}",
+                control_frequency=freq,
+                business_unit=self.bu,
+                owner=self.owner,
+                created_by=self.risk_officer,
+            )
+            self.assertEqual(control.control_frequency, freq)
+            control.delete()
 
     # --- Integrity & Relationship Tests ---
 
