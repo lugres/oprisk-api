@@ -178,6 +178,7 @@ class ControlCRUDTests(ControlTestBase):
         payload = {
             "title": "Manager Control",
             "description": "Should fail",
+            "control_frequency": ControlFrequency.DAILY,  # required field
             "business_unit": self.bu_finance.id,
             "owner": self.manager.id,
         }
