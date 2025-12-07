@@ -10,8 +10,9 @@ from django.contrib.auth import get_user_model
 from .models import Control
 from .workflows import (
     ControlPermissionError,
+    ControlValidationError,
     can_user_modify_library,
-    validate_deactivation,
+    validate_deactivation_allowed,
 )
 
 User = get_user_model()
@@ -60,7 +61,15 @@ def update_control(
     # Check if we are attempting to deactivate
     is_active_update = validated_data.get("is_active")
     if is_active_update is False and control.is_active:
-        validate_deactivation(control)
+        # Get statuses from linked risks (Django ORM)
+        linked_risk_statuses = list(
+            control.risks.values_list("status", flat=True)
+        )
+        # Call pure domain function
+        if not validate_deactivation_allowed(linked_risk_statuses):
+            raise ControlValidationError(
+                "Cannot deactivate control linked to ACTIVE risks."
+            )
 
     for field, value in validated_data.items():
         setattr(control, field, value)
