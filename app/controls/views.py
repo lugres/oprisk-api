@@ -14,11 +14,15 @@ from .workflows import ControlPermissionError, ControlValidationError
 
 
 class ControlPagination(PageNumberPagination):
+    """Provides pagination for output."""
+
     page_size = 50
     page_size_query_param = "page_size"
 
 
 class ControlViewSet(viewsets.ModelViewSet):
+    """ViewSet for managing controls API."""
+
     queryset = Control.objects.all()
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -26,6 +30,9 @@ class ControlViewSet(viewsets.ModelViewSet):
     filterset_class = filters.ControlFilter
 
     def get_queryset(self):
+        """
+        Implement data segregation based on user role.
+        """
         # Data segregation
         q_filter = services.get_control_visibility_filter(self.request.user)
         return (
@@ -37,6 +44,8 @@ class ControlViewSet(viewsets.ModelViewSet):
         )
 
     def get_serializer_class(self):
+        """Return the serializer class for request based on action."""
+
         if self.action in ["create", "update", "partial_update"]:
             return serializers.ControlCreateUpdateSerializer
         if self.action == "list":
@@ -44,6 +53,9 @@ class ControlViewSet(viewsets.ModelViewSet):
         return serializers.ControlDetailSerializer
 
     def create(self, request, *args, **kwargs):
+        """
+        Create a new control.
+        """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
@@ -60,6 +72,9 @@ class ControlViewSet(viewsets.ModelViewSet):
             )
 
     def update(self, request, *args, **kwargs):
+        """
+        Update a control.
+        """
         partial = kwargs.pop("partial", False)
         instance = self.get_object()
         serializer = self.get_serializer(
@@ -86,6 +101,9 @@ class ControlViewSet(viewsets.ModelViewSet):
             )
 
     def destroy(self, request, *args, **kwargs):
+        """
+        Delete a control.
+        """
         instance = self.get_object()
         try:
             services.delete_control(control=instance, user=request.user)

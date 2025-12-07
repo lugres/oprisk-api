@@ -82,6 +82,11 @@ def delete_control(*, control: Control, user: User):
     """
     Strictly forbids deletion of controls to preserve audit trails.
     """
+    # Why not to remove 'destroy' from allowed actions in ViewSet?
+    # Or not to override .destroy() in ViewSet to return 405 ?
+    # Because it's not finally decided by business (still consider
+    # allowing deletion with DB audit trigger).
+
     # The tests expect a 403 or 405. We raise PermissionError to be mapped
     # to 403.
     raise ControlPermissionError(
