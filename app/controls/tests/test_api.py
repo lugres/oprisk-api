@@ -25,7 +25,7 @@ User = get_user_model()
 #  ControlTestBase: Shared setup (Roles, Users, Reference Data).
 #  ControlCRUDTests: Basic lifecycle (Create, Update, Deactivate) by Role.
 #  ControlQuerysetTests: Visibility rules (Risk Officer vs. Employee).
-#  RiskControlLinkingTests: The critical integration with the Risks app.
+#  !! RiskControlLinkingTests: all link/unlink tests moved to the Risks app.
 #  ControlValidationTests: Business rule enforcement.
 #  ControlFilterTests: Search and filtering capabilities.
 
@@ -47,11 +47,6 @@ def control_list_url():
 
 def control_detail_url(control_id):
     return reverse("controls:control-detail", args=[control_id])
-
-
-def risk_action_url(risk_id, action):
-    # Used for linking tests (endpoints reside in Risks app)
-    return reverse(f"risks:risk-{action}", args=[risk_id])
 
 
 # --- Base Test Class ---
@@ -116,16 +111,7 @@ class ControlTestBase(TestCase):
             created_by=self.risk_officer,
         )
 
-        # --- Risks (For Linking Tests) ---
-        self.risk_draft = Risk.objects.create(
-            title="Draft Risk",
-            description="Test Risk",
-            status=RiskStatus.DRAFT,
-            risk_category=self.category,
-            business_unit=self.bu_finance,
-            owner=self.manager,
-            created_by=self.manager,
-        )
+        # --- Risks (For Linking-related Tests) ---
 
         self.risk_active = Risk.objects.create(
             title="Active Risk",
@@ -264,85 +250,16 @@ class ControlQuerysetTests(ControlTestBase):
 
 
 # --- Linking Tests (Integration with Risks) ---
+# These tests were moved to RiskLinkingTests of the risks app, so the tests
+# live where implementation lives, and it's consistent with other linking
 
 
-class RiskControlLinkingTests(ControlTestBase):
-    """
-    FR-2.1: Link Control to Risk
-    FR-2.3: Unlink Control from Risk
-    These test endpoints on the Risks API (`/api/risks/{id}/link-to-control/`).
-    """
-
-    def test_risk_officer_can_link_control_to_risk(self):
-        """Test linking an active control to a DRAFT risk."""
-        self.client.force_authenticate(user=self.risk_officer)
-        url = risk_action_url(self.risk_draft.id, "link-to-control")
-        payload = {
-            "control_id": self.control_active.id,
-            "notes": "Primary mitigation for fraud",
-        }
-        res = self.client.post(url, payload)
-
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
-
-        # Verify Link in DB
-        self.assertTrue(
-            RiskControl.objects.filter(
-                risk=self.risk_draft, control=self.control_active
-            ).exists()
-        )
-
-        # Verify Notes
-        link = RiskControl.objects.get(
-            risk=self.risk_draft, control=self.control_active
-        )
-        self.assertEqual(link.notes, "Primary mitigation for fraud")
-
-    def test_link_inactive_control_fails(self):
-        """Test cannot link an INACTIVE control to a risk."""
-        self.client.force_authenticate(user=self.risk_officer)
-        url = risk_action_url(self.risk_draft.id, "link-to-control")
-        payload = {"control_id": self.control_inactive.id}
-        res = self.client.post(url, payload)
-
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("inactive", str(res.data).lower())
-
-    def test_link_duplicate_control_fails(self):
-        """Test cannot link the same control twice."""
-        # Setup: Link once
-        RiskControl.objects.create(
-            risk=self.risk_draft,
-            control=self.control_active,
-            linked_by=self.risk_officer,
-        )
-
-        self.client.force_authenticate(user=self.risk_officer)
-        url = risk_action_url(self.risk_draft.id, "link-to-control")
-        res = self.client.post(url, {"control_id": self.control_active.id})
-
-        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("already linked", str(res.data).lower())
-
-    def test_unlink_control_from_risk(self):
-        """Test unlinking a control."""
-        # Setup
-        RiskControl.objects.create(
-            risk=self.risk_draft,
-            control=self.control_active,
-            linked_by=self.risk_officer,
-        )
-
-        self.client.force_authenticate(user=self.risk_officer)
-        url = risk_action_url(self.risk_draft.id, "unlink-from-control")
-        res = self.client.post(url, {"control_id": self.control_active.id})
-
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertFalse(
-            RiskControl.objects.filter(
-                risk=self.risk_draft, control=self.control_active
-            ).exists()
-        )
+# class RiskControlLinkingTests(ControlTestBase):
+#     """
+#     FR-2.1: Link Control to Risk
+#     FR-2.3: Unlink Control from Risk
+#     These test endpoints on the Risks API `/api/risks/{id}/link-to-control/`
+#     """
 
 
 # --- Validation Logic Tests ---

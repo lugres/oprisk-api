@@ -14,9 +14,15 @@ from rest_framework import status
 
 # from datetime import date, timedelta
 
-from risks.models import Risk, RiskStatus, RiskCategory
+from risks.models import Risk, RiskStatus, RiskCategory, RiskControl
 from incidents.models import Incident, IncidentStatusRef
 from measures.models import Measure, MeasureStatusRef
+from controls.models import (
+    Control,
+    ControlType,
+    ControlNature,
+    ControlFrequency,
+)
 from references.models import (
     BaselEventType,
     BusinessUnit,
@@ -35,7 +41,7 @@ User = get_user_model()
 #  RiskWorkflowTests - state machine transitions
 #  RiskCommentTests - comments during workflow transitions
 #  RiskBaselWorkflowTests - Basel event type validation throughout workflow
-#  RiskLinkingTests - relationships - linking/unlinking incidents and measures
+#  RiskLinkingTests - relationships - linking/unlinking other entities
 #  RiskValidationTests - business rules validation
 #  RiskFilteringTests - query parameter filtering and search
 #  RiskResponseFormatTests - serializer output and structure
@@ -90,6 +96,7 @@ class RiskTestBase(TestCase):
         self.bu_risk, _ = BusinessUnit.objects.get_or_create(
             name="Risk Management"
         )
+        self.bu_finance, _ = BusinessUnit.objects.get_or_create(name="Finance")
 
         # --- Create Basel event types ---
         self.basel_internal_fraud = BaselEventType.objects.create(
@@ -119,12 +126,16 @@ class RiskTestBase(TestCase):
             name="Legal & Compliance Risk"
         )
         self.legal_category.basel_event_types.add(self.basel_internal_fraud)
+        self.fin_category = RiskCategory.objects.create(name="Financial Risk")
 
         # --- Create context references ---
         self.process = BusinessProcess.objects.create(
             name="Payment Processing"
         )
         self.product = Product.objects.create(name="Credit Card")
+        self.process_ap = BusinessProcess.objects.create(
+            name="Accounts Payable"
+        )
 
         # --- Create users ---
         self.risk_officer = create_user(
@@ -153,6 +164,17 @@ class RiskTestBase(TestCase):
             self.manager,
         )
 
+        # --- Users in BU Finance to test risk-control linking
+        self.risk_officer_fin = create_user(
+            "ro@example.com", "passt123", self.role_risk, self.bu_finance
+        )
+        self.manager_fin = create_user(
+            "mgr@example.com", "passt123", self.role_mgr, self.bu_finance
+        )
+        self.employee_fin = create_user(
+            "emp@example.com", "passt123", self.role_emp, self.bu_finance
+        )
+
         # --- Create test incidents for linking ---
         inc_status, _ = IncidentStatusRef.objects.get_or_create(
             code="DRAFT", defaults={"name": "Draft"}
@@ -173,6 +195,54 @@ class RiskTestBase(TestCase):
             created_by=self.manager,
             responsible=self.employee,
             status=measure_status,
+        )
+
+        # --- Controls for linking ---
+        self.control_active = Control.objects.create(
+            title="Dual Signature",
+            description="Checks > $10k require 2 signatures",
+            control_type=ControlType.PREVENTIVE,
+            control_nature=ControlNature.MANUAL,
+            control_frequency=ControlFrequency.AD_HOC,
+            effectiveness=5,
+            business_unit=self.bu_finance,
+            business_process=self.process_ap,
+            owner=self.manager_fin,
+            is_active=True,
+            created_by=self.risk_officer_fin,
+        )
+
+        self.control_inactive = Control.objects.create(
+            title="Legacy Log",
+            description="Deprecated manual log",
+            control_type=ControlType.DETECTIVE,
+            business_unit=self.bu_finance,
+            owner=self.manager_fin,
+            is_active=False,
+            created_by=self.risk_officer_fin,
+        )
+
+        # --- Risks (Simple, specifically For Linking Tests) ---
+        self.risk_fin_draft = Risk.objects.create(
+            title="Draft Risk",
+            description="Test Risk",
+            status=RiskStatus.DRAFT,
+            risk_category=self.fin_category,
+            business_unit=self.bu_finance,
+            owner=self.manager_fin,
+            created_by=self.manager_fin,
+        )
+
+        self.risk_fin_active = Risk.objects.create(
+            title="Active Risk",
+            description="Live Risk",
+            status=RiskStatus.ACTIVE,
+            risk_category=self.fin_category,
+            business_unit=self.bu_finance,
+            owner=self.manager_fin,
+            created_by=self.risk_officer_fin,
+            # Active risks technically need other fields set,
+            # simplified for linking tests
         )
 
         # --- Create test risks in different statuses ---
@@ -996,7 +1066,9 @@ class RiskBaselWorkflowTests(RiskTestBase):
 
 
 class RiskLinkingTests(RiskTestBase):
-    """Test linking/unlinking risks to incidents and measures."""
+    """Test linking/unlinking risks to incidents, measures and controls."""
+
+    # Incident linking tests
 
     def test_link_risk_to_incident_succeeds(self):
         """Test linking a risk to an incident."""
@@ -1087,6 +1159,8 @@ class RiskLinkingTests(RiskTestBase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("is not linked", str(res.data))
 
+    # Measure linking tests
+
     def test_link_risk_to_measure_succeeds(self):
         """Test linking a risk to a measure."""
         self.client.force_authenticate(user=self.risk_officer)
@@ -1120,6 +1194,79 @@ class RiskLinkingTests(RiskTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertNotIn(self.measure, self.risk_active.measures.all())
+
+    # Control linking tests
+
+    def test_risk_officer_can_link_control_to_risk(self):
+        """Test linking an active control to a DRAFT risk."""
+        self.client.force_authenticate(user=self.risk_officer_fin)
+        url = risk_action_url(self.risk_fin_draft.id, "link-to-control")
+        payload = {
+            "control_id": self.control_active.id,
+            "notes": "Primary mitigation for fraud",
+        }
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Verify Link in DB
+        self.assertTrue(
+            RiskControl.objects.filter(
+                risk=self.risk_fin_draft, control=self.control_active
+            ).exists()
+        )
+
+        # Verify Notes
+        link = RiskControl.objects.get(
+            risk=self.risk_fin_draft, control=self.control_active
+        )
+        self.assertEqual(link.notes, "Primary mitigation for fraud")
+
+    def test_link_inactive_control_fails(self):
+        """Test cannot link an INACTIVE control to a risk."""
+        self.client.force_authenticate(user=self.risk_officer_fin)
+        url = risk_action_url(self.risk_fin_draft.id, "link-to-control")
+        payload = {"control_id": self.control_inactive.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("inactive", str(res.data).lower())
+
+    def test_link_duplicate_control_fails(self):
+        """Test cannot link the same control twice."""
+        # Setup: Link once
+        RiskControl.objects.create(
+            risk=self.risk_fin_draft,
+            control=self.control_active,
+            linked_by=self.risk_officer_fin,
+        )
+
+        self.client.force_authenticate(user=self.risk_officer_fin)
+        url = risk_action_url(self.risk_fin_draft.id, "link-to-control")
+        res = self.client.post(url, {"control_id": self.control_active.id})
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("already linked", str(res.data).lower())
+
+    def test_unlink_control_from_risk(self):
+        """Test unlinking a control."""
+        # Setup
+        RiskControl.objects.create(
+            risk=self.risk_fin_draft,
+            control=self.control_active,
+            linked_by=self.risk_officer_fin,
+        )
+
+        self.client.force_authenticate(user=self.risk_officer_fin)
+        url = risk_action_url(self.risk_fin_draft.id, "unlink-from-control")
+        res = self.client.post(url, {"control_id": self.control_active.id})
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(
+            RiskControl.objects.filter(
+                risk=self.risk_fin_draft, control=self.control_active
+            ).exists()
+        )
 
 
 # --- Validation Tests ---
