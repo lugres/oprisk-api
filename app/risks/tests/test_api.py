@@ -14,7 +14,7 @@ from rest_framework import status
 
 # from datetime import date, timedelta
 
-from risks.models import Risk, RiskStatus, RiskCategory, RiskControl
+from risks.models import Risk, RiskStatus, RiskCategory
 from incidents.models import Incident, IncidentStatusRef
 from measures.models import Measure, MeasureStatusRef
 from controls.models import (
@@ -1209,18 +1209,15 @@ class RiskLinkingTests(RiskTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
 
-        # Verify Link in DB
-        self.assertTrue(
-            RiskControl.objects.filter(
-                risk=self.risk_fin_draft, control=self.control_active
-            ).exists()
-        )
+        # Verify Link in DB via M2M relationship
+        self.assertIn(self.control_active, self.risk_fin_draft.controls.all())
 
-        # Verify Notes
-        link = RiskControl.objects.get(
-            risk=self.risk_fin_draft, control=self.control_active
+        # Verify Notes via relationship manager
+        link = self.risk_fin_draft.riskcontrol_set.get(
+            control=self.control_active
         )
         self.assertEqual(link.notes, "Primary mitigation for fraud")
+        self.assertEqual(link.linked_by, self.risk_officer_fin)
 
     def test_link_inactive_control_fails(self):
         """Test cannot link an INACTIVE control to a risk."""
@@ -1234,11 +1231,10 @@ class RiskLinkingTests(RiskTestBase):
 
     def test_link_duplicate_control_fails(self):
         """Test cannot link the same control twice."""
-        # Setup: Link once
-        RiskControl.objects.create(
-            risk=self.risk_fin_draft,
-            control=self.control_active,
-            linked_by=self.risk_officer_fin,
+        # Setup: Link via M2M relationship
+        self.risk_fin_draft.controls.add(
+            self.control_active,
+            through_defaults={"linked_by": self.risk_officer_fin},
         )
 
         self.client.force_authenticate(user=self.risk_officer_fin)
@@ -1250,11 +1246,10 @@ class RiskLinkingTests(RiskTestBase):
 
     def test_unlink_control_from_risk(self):
         """Test unlinking a control."""
-        # Setup
-        RiskControl.objects.create(
-            risk=self.risk_fin_draft,
-            control=self.control_active,
-            linked_by=self.risk_officer_fin,
+        # Setup via M2M relationship
+        self.risk_fin_draft.controls.add(
+            self.control_active,
+            through_defaults={"linked_by": self.risk_officer_fin},
         )
 
         self.client.force_authenticate(user=self.risk_officer_fin)
@@ -1262,10 +1257,10 @@ class RiskLinkingTests(RiskTestBase):
         res = self.client.post(url, {"control_id": self.control_active.id})
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
-        self.assertFalse(
-            RiskControl.objects.filter(
-                risk=self.risk_fin_draft, control=self.control_active
-            ).exists()
+
+        # Verify using M2M relationship
+        self.assertNotIn(
+            self.control_active, self.risk_fin_draft.controls.all()
         )
 
 
