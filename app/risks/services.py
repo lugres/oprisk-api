@@ -240,6 +240,12 @@ def approve(*, risk: Risk, user: User) -> Risk:
             "Residual risk score cannot exceed inherent risk score."
         )
 
+    # At least one control must be linked
+    if risk.controls.count() == 0:
+        raise RiskTransitionError(
+            "At least one control must be linked before approval."
+        )
+
     risk.status = RiskStatus.ACTIVE
     risk.validated_at = timezone.now()
     risk.validated_by = user

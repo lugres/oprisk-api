@@ -223,6 +223,17 @@ class RiskTestBase(TestCase):
             created_by=self.risk_officer_fin,
         )
 
+        self.control_active_simple = Control.objects.create(
+            title="Simple control",
+            description="Specifically for 'approve'-related tests",
+            control_type=ControlType.PREVENTIVE,
+            effectiveness=5,
+            business_unit=self.bu_ops,
+            owner=self.manager,
+            is_active=True,
+            created_by=self.risk_officer,
+        )
+
         # --- Risks (Simple, specifically For Linking Tests) ---
         self.risk_fin_draft = Risk.objects.create(
             title="Draft Risk",
@@ -277,6 +288,12 @@ class RiskTestBase(TestCase):
             residual_impact=3,
             submitted_for_review_at=timezone.now(),
             submitted_by=self.manager,
+        )
+
+        # Link control to assessed risk for 'approve'
+        self.risk_assessed.controls.add(
+            self.control_active_simple,
+            through_defaults={"linked_by": self.risk_officer},
         )
 
         self.risk_active = Risk.objects.create(
@@ -748,6 +765,21 @@ class RiskWorkflowTests(RiskTestBase):
         self.assertIn("Residual risk", str(res.data))
         self.assertIn("cannot exceed", str(res.data))
 
+    def test_cannot_approve_risk_without_controls(self):
+        """Test that risk approval is blocked without controls."""
+        # Unlink all controls first
+        self.risk_assessed.controls.clear()
+        self.assertEqual(self.risk_assessed.controls.count(), 0)
+
+        # Try to approve risk with NO controls linked
+        self.client.force_authenticate(user=self.risk_officer)
+
+        url = risk_action_url(self.risk_assessed.id, "approve")
+        res = self.client.post(url)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("at least one control", str(res.data).lower())
+
     def test_risk_officer_can_approve_directly_from_draft(self):
         """Test Risk Officer can move DRAFT -> ACTIVE (Workshop Mode)."""
         # Setup: Risk Officer must fill ALL required fields in DRAFT first
@@ -757,6 +789,12 @@ class RiskWorkflowTests(RiskTestBase):
         self.risk_draft.residual_impact = 2
         self.risk_draft.basel_event_type = self.basel_internal_fraud
         self.risk_draft.save()
+
+        # Link control for 'approve'
+        self.risk_draft.controls.add(
+            self.control_active_simple,
+            through_defaults={"linked_by": self.risk_officer},
+        )
 
         self.client.force_authenticate(user=self.risk_officer)
         url = risk_action_url(self.risk_draft.id, "approve")
@@ -1747,6 +1785,18 @@ class RiskIntegrationTests(RiskTestBase):
         self.assertIn("approve", actions)
         self.assertIn("send-back", actions)
 
+        # Risk Officer links control
+        link_url = risk_action_url(risk_id, "link-to-control")
+        res = self.client.post(
+            link_url,
+            {
+                "control_id": self.control_active_simple.id,
+                "notes": "Mitigates fraud",
+            },
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn(self.control_active_simple, risk.controls.all())
+
         # Approve (ASSESSED → ACTIVE)
         url = risk_action_url(risk_id, "approve")
         res = self.client.post(url)
@@ -1815,6 +1865,11 @@ class RiskIntegrationTests(RiskTestBase):
         self.risk_draft.residual_impact = 1
         self.risk_draft.basel_event_type = self.basel_internal_fraud
         self.risk_draft.save()
+        # Link one control for 'approve'
+        self.risk_draft.controls.add(
+            self.control_active_simple,
+            through_defaults={"linked_by": self.risk_officer},
+        )
 
         self.client.force_authenticate(user=self.risk_officer)
         approve_url = risk_action_url(risk_id, "approve")
@@ -1853,6 +1908,17 @@ class RiskIntegrationTests(RiskTestBase):
         res = self.client.patch(detail_url, patch_payload)
         self.assertEqual(res.status_code, status.HTTP_200_OK)
 
+        # 2.5 Link control
+        link_url = risk_action_url(risk_id, "link-to-control")
+        res = self.client.post(
+            link_url,
+            {
+                "control_id": self.control_active_simple.id,
+                "notes": "Mitigates well",
+            },
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
         # 3. Direct Approval (DRAFT -> ACTIVE)
         approve_url = risk_action_url(risk_id, "approve")
         res = self.client.post(approve_url)
@@ -1879,6 +1945,20 @@ class RiskIntegrationTests(RiskTestBase):
             url, {"inherent_likelihood": 3, "residual_likelihood": 1}
         )
         self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Link control
+        link_url = risk_action_url(self.risk_active.id, "link-to-control")
+        res = self.client.post(
+            link_url,
+            {
+                "control_id": self.control_active_simple.id,
+                "notes": "Mitigates well",
+            },
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn(
+            self.control_active_simple, self.risk_active.controls.all()
+        )
 
         # Re-approve
         url = risk_action_url(self.risk_active.id, "approve")
