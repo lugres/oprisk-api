@@ -364,6 +364,14 @@ def unlink_control(*, risk: Risk, user: User, control: Control):
     if risk.status == RiskStatus.RETIRED:
         raise RiskTransitionError("Cannot unlink controls from retired risks.")
 
+    if risk.status == RiskStatus.ACTIVE:
+        remaining = risk.controls.exclude(id=control.id).count()
+        if remaining == 0:
+            raise RiskTransitionError(
+                "Cannot unlink last control from ACTIVE risk. "
+                "At least one control must remain."
+            )
+
     try:
         link = RiskControl.objects.get(risk=risk, control=control)
         link.delete()
