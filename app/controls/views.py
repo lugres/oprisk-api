@@ -46,6 +46,19 @@ class ControlViewSet(viewsets.ModelViewSet):
         except get_user_model().DoesNotExist:
             return None
 
+    def _get_response_serializer(self, instance):
+        """
+        Helper to return a ControlDetailSerializer with full contextual data.
+        """
+        context = self.get_serializer_context()
+        user = self._get_fully_loaded_user()
+
+        if user:
+            contextual_data = services.get_control_context(instance, user)
+            context.update(contextual_data)
+
+        return serializers.ControlDetailSerializer(instance, context=context)
+
     def get_queryset(self):
         """
         Implement data segregation based on user role.
@@ -77,6 +90,13 @@ class ControlViewSet(viewsets.ModelViewSet):
             return serializers.ControlListSerializer
         return serializers.ControlDetailSerializer
 
+    def retrieve(self, request, *args, **kwargs):
+        """Retrieve a single control with contextual data."""
+
+        instance = self.get_object()
+        serializer = self._get_response_serializer(instance)
+        return Response(serializer.data)
+
     def create(self, request, *args, **kwargs):
         """
         Create a new control.
@@ -88,7 +108,7 @@ class ControlViewSet(viewsets.ModelViewSet):
                 user=request.user, **serializer.validated_data
             )
             return Response(
-                serializers.ControlDetailSerializer(control).data,
+                self._get_response_serializer(control).data,
                 status=status.HTTP_201_CREATED,
             )
         except ControlPermissionError as e:
@@ -113,7 +133,7 @@ class ControlViewSet(viewsets.ModelViewSet):
                 **serializer.validated_data
             )
             return Response(
-                serializers.ControlDetailSerializer(control).data,
+                self._get_response_serializer(control).data,
                 status=status.HTTP_200_OK,
             )
         except ControlPermissionError as e:

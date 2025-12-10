@@ -28,6 +28,7 @@ User = get_user_model()
 #  !! RiskControlLinkingTests: all link/unlink tests moved to the Risks app.
 #  ControlValidationTests: Business rule enforcement.
 #  ControlFilterTests: Search and filtering capabilities.
+#  ControlResponseFormatTests: Context logic is present in the response.
 
 # --- Helper Functions ---
 
@@ -434,3 +435,84 @@ class ControlFilterTests(ControlTestBase):
         ids = [c["id"] for c in res.data["results"]]
         self.assertIn(self.control_active.id, ids)
         self.assertNotIn(self.control_inactive.id, ids)
+
+
+class ControlResponseFormatTests(ControlTestBase):
+    """
+    Test API response format and contextual data.
+    """
+
+    def setUp(self):
+        super().setUp()
+
+        self.risk_draft = Risk.objects.create(
+            title="Finance App Risk",
+            description="Some description",
+            status=RiskStatus.DRAFT,
+            risk_category=self.category,
+            business_unit=self.bu_finance,  # Finance BU
+            owner=self.manager,  # Finance Manager
+            created_by=self.manager,
+        )
+
+    def test_response_includes_permissions_for_risk_officer(self):
+        """Risk Officer should see can_edit=True."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = control_detail_url(self.control_active.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("permissions", res.data)
+        self.assertTrue(res.data["permissions"]["can_edit"])
+        self.assertTrue(res.data["permissions"]["can_deactivate"])
+
+    def test_response_includes_permissions_for_manager(self):
+        """Manager should see can_edit=False."""
+        self.client.force_authenticate(user=self.manager)
+        url = control_detail_url(self.control_active.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("permissions", res.data)
+        self.assertFalse(res.data["permissions"]["can_edit"])
+        self.assertFalse(res.data["permissions"]["can_deactivate"])
+
+    def test_can_deactivate_is_false_when_linked_to_active_risk(self):
+        """
+        Test permission logic reflects business rules (blocking deactivation).
+        """
+        # Setup: Link control to ACTIVE risk
+        self.risk_active.controls.add(
+            self.control_active,
+            through_defaults={"linked_by": self.risk_officer},
+        )
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = control_detail_url(self.control_active.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        # Even though user is Risk Officer...
+        self.assertTrue(res.data["permissions"]["can_edit"])
+        # ...they cannot deactivate because of the link.
+        self.assertFalse(res.data["permissions"]["can_deactivate"])
+
+    def test_response_includes_metadata_counts(self):
+        """Test computed fields for linked risks."""
+        # Link to 1 active risk and 1 draft risk
+        self.risk_active.controls.add(
+            self.control_active,
+            through_defaults={"linked_by": self.risk_officer},
+        )
+        self.risk_draft.controls.add(
+            self.control_active,
+            through_defaults={"linked_by": self.risk_officer},
+        )
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = control_detail_url(self.control_active.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res.data["linked_risks_count"], 2)
+        self.assertEqual(res.data["active_risks_count"], 1)

@@ -8,6 +8,7 @@ from django.db.models import Q
 from django.contrib.auth import get_user_model
 
 from .models import Control
+from risks.models import RiskStatus
 from .workflows import (
     ControlPermissionError,
     ControlValidationError,
@@ -16,6 +17,36 @@ from .workflows import (
 )
 
 User = get_user_model()
+
+
+def get_control_context(control: Control, user: User) -> dict:
+    """
+    Gathers contextual data for the ControlDetailSerializer.
+    Returns permissions and metadata specific to this user/control.
+    """
+    # 1. Calculate Permissions
+    is_ro = can_user_modify_library(user)
+
+    # Check if linked to any ACTIVE risks (blocking deactivation)
+    # control.risks is the related_name from Risk.controls M2M
+    has_active_risks = control.risks.filter(status=RiskStatus.ACTIVE).exists()
+
+    permissions = {
+        "can_edit": is_ro,
+        # Deactivation is allowed only for ROs AND if no active links exist
+        "can_deactivate": is_ro and not has_active_risks,
+        "can_delete": False,  # Hard delete is never allowed in this API
+    }
+
+    # 2. Calculate Metadata
+    linked_risks_count = control.risks.count()
+    active_risks_count = control.risks.filter(status=RiskStatus.ACTIVE).count()
+
+    return {
+        "permissions": permissions,
+        "linked_risks_count": linked_risks_count,
+        "active_risks_count": active_risks_count,
+    }
 
 
 def get_control_visibility_filter(user) -> Q:

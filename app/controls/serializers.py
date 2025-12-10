@@ -39,10 +39,15 @@ class ControlListSerializer(serializers.ModelSerializer):
 
 
 class ControlDetailSerializer(serializers.ModelSerializer):
-    """Full detail serializer."""
+    """Full detail serializer with context."""
 
     owner = UserNestedSerializer(read_only=True)
     created_by = UserNestedSerializer(read_only=True)
+
+    # Contextual Fields
+    permissions = serializers.SerializerMethodField()
+    linked_risks_count = serializers.SerializerMethodField(read_only=True)
+    active_risks_count = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Control
@@ -62,7 +67,22 @@ class ControlDetailSerializer(serializers.ModelSerializer):
             "created_by",
             "created_at",
             "updated_at",
+            "permissions",
+            "linked_risks_count",
+            "active_risks_count",
         ]
+
+    def get_permissions(self, obj):
+        """Get control's permissions from context."""
+        return self.context.get("permissions", {})
+
+    def get_linked_risks_count(self, obj):
+        """Get computed field from context."""
+        return self.context.get("linked_risks_count", {})
+
+    def get_active_risks_count(self, obj):
+        """Get computed field from context."""
+        return self.context.get("active_risks_count", {})
 
 
 class ControlCreateUpdateSerializer(serializers.ModelSerializer):
