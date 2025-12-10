@@ -159,6 +159,34 @@ class ControlCRUDTests(ControlTestBase):
         self.assertTrue(control.is_active)  # Default is active
         self.assertEqual(control.created_by, self.risk_officer)
 
+    def test_create_control_without_required_fields_fails(self):
+        """Test validation of required fields."""
+        self.client.force_authenticate(user=self.risk_officer)
+        payload = {
+            "title": "Incomplete Control",
+            # Missing: description, control_frequency, business_unit, owner
+        }
+        res = self.client.post(control_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("description", str(res.data))
+        self.assertIn("control_frequency", str(res.data))
+
+    def test_effectiveness_out_of_range_fails(self):
+        """Test effectiveness must be 1-5."""
+        self.client.force_authenticate(user=self.risk_officer)
+        payload = {
+            "title": "Test",
+            "description": "Test",
+            "control_frequency": ControlFrequency.DAILY,
+            "business_unit": self.bu_finance.id,
+            "owner": self.manager.id,
+            "effectiveness": 6,  # Invalid
+        }
+        res = self.client.post(control_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_create_control_as_manager_fails(self):
         """Test Manager CANNOT create controls (Library managed centrally)."""
         self.client.force_authenticate(user=self.manager)
@@ -172,6 +200,19 @@ class ControlCRUDTests(ControlTestBase):
         res = self.client.post(control_list_url(), payload)
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
+    def test_employee_cannot_create_control(self):
+        """Test Employee cannot create controls."""
+        self.client.force_authenticate(user=self.employee)
+        payload = {
+            "title": "Employee Control",
+            "description": "Should fail",
+            "control_frequency": ControlFrequency.DAILY,  # required field
+            "business_unit": self.bu_finance.id,
+            "owner": self.employee.id,
+        }
+        res = self.client.post(control_list_url(), payload)
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_update_control_as_risk_officer(self):
         """Test Risk Officer can update control attributes."""
         self.client.force_authenticate(user=self.risk_officer)
@@ -181,6 +222,22 @@ class ControlCRUDTests(ControlTestBase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.control_active.refresh_from_db()
         self.assertEqual(self.control_active.effectiveness, 3)
+
+    def test_manager_cannot_edit_control(self):
+        """Test Manager cannot edit controls (read-only access)."""
+        self.client.force_authenticate(user=self.manager)
+        url = control_detail_url(self.control_active.id)
+        res = self.client.patch(url, {"effectiveness": 2})
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_employee_cannot_edit_control(self):
+        """Test Employee cannot create controls."""
+        self.client.force_authenticate(user=self.employee)
+        url = control_detail_url(self.control_active.id)
+        res = self.client.patch(url, {"effectiveness": 2})
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_deactivate_control(self):
         """Test Risk Officer can deactivate a control (Soft Delete)."""
