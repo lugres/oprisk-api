@@ -215,28 +215,88 @@ class ControlCRUDTests(ControlTestBase):
 class ControlQuerysetTests(ControlTestBase):
     """
     FR-1.2: View Control Library
-    Tests visibility rules for different roles.
+    Tests visibility rules for different roles and BU segregation.
     """
 
-    def test_risk_officer_sees_all_controls(self):
-        """Risk Officer sees both active and inactive controls."""
+    def setUp(self):
+        super().setUp()
+
+        # --- Additional Data for Visibility Tests ---
+
+        # Control in IT BU (Different from test users' Finance BU)
+        self.control_it = Control.objects.create(
+            title="IT Firewall",
+            control_type=ControlType.PREVENTIVE,
+            business_unit=self.bu_it,  # <-- IT BU
+            owner=self.it_manager,
+            created_by=self.risk_officer,
+            is_active=True,
+        )
+        self.control_it_not_linked = Control.objects.create(
+            title="IT Firewall",
+            control_type=ControlType.PREVENTIVE,
+            business_unit=self.bu_it,  # <-- IT BU
+            owner=self.it_manager,
+            created_by=self.risk_officer,
+            is_active=True,
+        )
+
+        # Risk in Finance BU owned by Manager, linked to the IT Control
+        # This tests the "View controls linked to risks they own" rule
+        self.risk_cross_linked = Risk.objects.create(
+            title="Finance App Risk",
+            description="Some description",
+            status=RiskStatus.ACTIVE,
+            risk_category=self.category,
+            business_unit=self.bu_finance,  # Finance BU
+            owner=self.manager,  # Finance Manager
+            created_by=self.manager,
+        )
+        # Use the semantic add() for modern Django testing
+        self.risk_cross_linked.controls.add(
+            self.control_it, through_defaults={"linked_by": self.manager}
+        )
+
+    def test_risk_officer_sees_all_controls_in_own_bu(self):
+        """Risk Officer sees both active and inactive controls in their BU."""
         self.client.force_authenticate(user=self.risk_officer)
         res = self.client.get(control_list_url())
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         ids = [c["id"] for c in res.data["results"]]
+
+        # Should see Finance controls
         self.assertIn(self.control_active.id, ids)
         self.assertIn(self.control_inactive.id, ids)
 
-    def test_manager_sees_only_active_controls(self):
+        # Should NOT see IT controls (unless linked to risks in BU)
+        # (unless linked? BRD implies BU scope for library management)
+        self.assertIn(self.control_it.id, ids)
+        self.assertNotIn(self.control_it_not_linked.id, ids)
+
+    def test_manager_sees_only_active_controls_in_own_bu(self):
         """Manager sees only active controls by default."""
         self.client.force_authenticate(user=self.manager)
         res = self.client.get(control_list_url())
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         ids = [c["id"] for c in res.data["results"]]
+
+        # See active Finance
         self.assertIn(self.control_active.id, ids)
+        # No inactive
         self.assertNotIn(self.control_inactive.id, ids)
+
+    def test_manager_sees_cross_bu_control_if_linked_to_owned_risk(self):
+        """Manager sees IT control because it is linked to a Risk they own."""
+        self.client.force_authenticate(user=self.manager)
+        res = self.client.get(control_list_url())
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        ids = [c["id"] for c in res.data["results"]]
+
+        # Crucial assertion: Manager sees IT control due to linkage
+        self.assertIn(self.control_it.id, ids)
 
     def test_employee_sees_only_active_controls(self):
         """Employee sees only active controls."""
@@ -247,6 +307,31 @@ class ControlQuerysetTests(ControlTestBase):
         ids = [c["id"] for c in res.data["results"]]
         self.assertIn(self.control_active.id, ids)
         self.assertNotIn(self.control_inactive.id, ids)
+
+    def test_employee_sees_cross_bu_control_if_linked_to_bu_risk(self):
+        """
+        Employee sees IT control because it is linked to a Risk in their BU.
+        """
+        self.client.force_authenticate(user=self.employee)
+        res = self.client.get(control_list_url())
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        ids = [c["id"] for c in res.data["results"]]
+
+        # Employee sees it because the Risk is in Finance BU
+        # (even if they don't own it)
+        self.assertIn(self.control_it.id, ids)
+
+    def test_employee_does_not_see_unlinked_other_bu_control(self):
+        """Employee does NOT see IT control if no link exists."""
+        # Unlink the control first
+        self.risk_cross_linked.controls.remove(self.control_it)
+
+        self.client.force_authenticate(user=self.employee)
+        res = self.client.get(control_list_url())
+
+        ids = [c["id"] for c in res.data["results"]]
+        self.assertNotIn(self.control_it.id, ids)
 
 
 # --- Linking Tests (Integration with Risks) ---

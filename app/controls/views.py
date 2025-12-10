@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
+from django.contrib.auth import get_user_model
 
 from .models import Control
 from . import serializers, services, filters
@@ -29,19 +30,43 @@ class ControlViewSet(viewsets.ModelViewSet):
     pagination_class = ControlPagination
     filterset_class = filters.ControlFilter
 
+    def _get_fully_loaded_user(self):
+        """
+        Helper method to get the fully-loaded user object with related data.
+        Returns None if user is not authenticated or doesn't exist.
+        """
+        if not self.request.user.is_authenticated:
+            return None
+        try:
+            return (
+                get_user_model()
+                .objects.select_related("role", "manager", "business_unit")
+                .get(id=self.request.user.id)
+            )
+        except get_user_model().DoesNotExist:
+            return None
+
     def get_queryset(self):
         """
         Implement data segregation based on user role.
         """
-        # Data segregation
-        q_filter = services.get_control_visibility_filter(self.request.user)
-        return (
+        user = self._get_fully_loaded_user()
+        if not user or not user.role:
+            return super().get_queryset().none()
+
+        # Pre-fetch for performance and permissions
+        queryset = (
             super()
             .get_queryset()
-            .filter(q_filter)
             .select_related("business_unit", "owner", "created_by")
-            .order_by("-id")
         )
+
+        # Apply visibility rules from service layer
+        q_filter = services.get_control_visibility_filter(user)
+
+        # Distinct is required because the filter may use joins
+        #  (e.g. risks__owner)
+        return queryset.filter(q_filter).distinct().order_by("-id")
 
     def get_serializer_class(self):
         """Return the serializer class for request based on action."""

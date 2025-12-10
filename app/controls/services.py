@@ -20,18 +20,47 @@ User = get_user_model()
 
 def get_control_visibility_filter(user) -> Q:
     """
-    Returns a Q object for filtering controls based on user role.
-    - Risk Officers: View ALL (active and inactive).
-    - Managers/Employees: View ACTIVE only.
+    Returns a Q object for filtering controls based on user role and context.
+
+    Business Rules:
+    - Risk Officer:
+        - All controls in their Business Unit (active and inactive).
+    - Manager:
+        - Active controls in their Business Unit.
+        - Active controls linked to Risks they own (even if in other BUs).
+    - Employee:
+        - Active controls in their Business Unit.
+        - Active controls linked to Risks in their Business Unit.
     """
     if not user or not user.role:
         return Q(pk__in=[])
 
+    # 1. Risk Officer: View ALL in their BU (Library Maintenance scope)
     if user.role.name == "Risk Officer":
-        return Q()  # See all
+        return Q(business_unit=user.business_unit) | Q(
+            risks__business_unit=user.business_unit
+        )  # See all in BU and linked
 
-    # Everyone else sees only active controls
-    return Q(is_active=True)
+    # 2. Base Filter for Manager/Employee: Control Must be Active
+    base_filter = Q(is_active=True)
+
+    # 3. Manager Logic
+    if user.role.name == "Manager":
+        # Rule A: In their BU
+        bu_filter = Q(business_unit=user.business_unit)
+        # Rule B: Linked to risks they own (Cross-BU visibility exception)
+        # 'risks' is the related_name from Risk.controls M2M
+        risk_link_filter = Q(risks__owner=user)
+
+        return base_filter & (bu_filter | risk_link_filter)
+
+    # 4. Employee Logic (Default)
+    # Rule A: In their BU
+    bu_filter = Q(business_unit=user.business_unit)
+    # Rule B: Linked to risks in their BU (Contextual visibility)
+    risk_link_filter = Q(risks__business_unit=user.business_unit)
+
+    return base_filter & (bu_filter | risk_link_filter)
 
 
 @transaction.atomic
