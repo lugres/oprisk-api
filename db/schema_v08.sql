@@ -240,6 +240,7 @@ CREATE INDEX idx_incident_bu ON incidents(business_unit_id);
 CREATE INDEX idx_incident_status ON incidents(status_id);
 --CREATE INDEX idx_incident_basel ON incidents(basel_event_type_id, basel_business_line_id);
 
+-- + controls
 CREATE TABLE controls (
     id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -336,6 +337,7 @@ CREATE TABLE incident_cause (
     PRIMARY KEY (incident_id, loss_cause_id)
 );
 
+-- + risks
 CREATE TABLE risk_control (
     risk_id INT REFERENCES risks(id) ON DELETE CASCADE,
     control_id INT REFERENCES controls(id) ON DELETE CASCADE,

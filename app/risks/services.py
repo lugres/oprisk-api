@@ -8,7 +8,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import Risk, RiskStatus, IncidentRisk, RiskMeasure
+from .models import Risk, RiskStatus, IncidentRisk, RiskMeasure, RiskControl
 from .workflows import (
     RiskTransitionError,
     RiskPermissionError,
@@ -21,6 +21,7 @@ from .workflows import (
 )
 from incidents.models import Incident
 from measures.models import Measure
+from controls.models import Control
 
 User = get_user_model()
 
@@ -239,6 +240,12 @@ def approve(*, risk: Risk, user: User) -> Risk:
             "Residual risk score cannot exceed inherent risk score."
         )
 
+    # At least one control must be linked
+    if risk.controls.count() == 0:
+        raise RiskTransitionError(
+            "At least one control must be linked before approval."
+        )
+
     risk.status = RiskStatus.ACTIVE
     risk.validated_at = timezone.now()
     risk.validated_by = user
@@ -330,3 +337,49 @@ def unlink_measure(*, risk: Risk, user: User, measure: Measure):
         link.delete()
     except RiskMeasure.DoesNotExist:
         raise RiskTransitionError("Measure is not linked.")
+
+
+@transaction.atomic
+def link_control(*, risk: Risk, user: User, control: Control, notes: str = ""):
+    """Links a library control to a risk."""
+
+    # 1. Validation: Risk State
+    if risk.status == RiskStatus.RETIRED:
+        raise RiskTransitionError("Cannot link controls to retired risks.")
+
+    # 2. Validation: Control State
+    if not control.is_active:
+        raise RiskTransitionError("Cannot link inactive controls.")
+
+    # 3. Validation: Duplicate
+    link, created = RiskControl.objects.get_or_create(
+        risk=risk,
+        control=control,
+        defaults={"linked_by": user, "notes": notes},
+    )
+
+    if not created:
+        raise RiskTransitionError("Control already linked.")
+
+
+@transaction.atomic
+def unlink_control(*, risk: Risk, user: User, control: Control):
+    """Unlinks a control from a risk."""
+
+    # 1. Validation: Risk State
+    if risk.status == RiskStatus.RETIRED:
+        raise RiskTransitionError("Cannot unlink controls from retired risks.")
+
+    if risk.status == RiskStatus.ACTIVE:
+        remaining = risk.controls.exclude(id=control.id).count()
+        if remaining == 0:
+            raise RiskTransitionError(
+                "Cannot unlink last control from ACTIVE risk. "
+                "At least one control must remain."
+            )
+
+    try:
+        link = RiskControl.objects.get(risk=risk, control=control)
+        link.delete()
+    except RiskControl.DoesNotExist:
+        raise RiskTransitionError("Control is not linked.")

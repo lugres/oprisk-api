@@ -110,6 +110,8 @@ class RiskViewSet(viewsets.ModelViewSet):
             return serializers.RiskLinkIncidentSerializer
         if self.action in ["link_to_measure", "unlink_from_measure"]:
             return serializers.RiskLinkMeasureSerializer
+        if self.action in ["link_to_control", "unlink_from_control"]:
+            return serializers.RiskLinkControlSerializer
         return serializers.RiskDetailSerializer
 
     def get_serializer_context(self):
@@ -363,6 +365,52 @@ class RiskViewSet(viewsets.ModelViewSet):
                 risk=self.get_object(),
                 user=self._get_fully_loaded_user(),
                 measure=serializer.validated_data["measure_id"],
+            )
+            return Response({"status": "unlinked"}, status=status.HTTP_200_OK)
+        except RiskTransitionError as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="link-to-control",
+        url_name="link-to-control",
+    )
+    def link_to_control(self, request, pk=None):
+        """Action to link a control to the risk."""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            services.link_control(
+                risk=self.get_object(),
+                user=self._get_fully_loaded_user(),
+                control=serializer.validated_data["control_id"],
+                notes=serializer.validated_data.get("notes", ""),
+            )
+            return Response({"status": "linked"}, status=status.HTTP_200_OK)
+        except RiskTransitionError as e:
+            # The test expects 400 for "inactive" or "already linked"
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="unlink-from-control",
+        url_name="unlink-from-control",
+    )
+    def unlink_from_control(self, request, pk=None):
+        """Action to unlink a control from the risk."""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            services.unlink_control(
+                risk=self.get_object(),
+                user=self._get_fully_loaded_user(),
+                control=serializer.validated_data["control_id"],
             )
             return Response({"status": "unlinked"}, status=status.HTTP_200_OK)
         except RiskTransitionError as e:

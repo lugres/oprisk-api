@@ -8,6 +8,7 @@ from django.contrib.auth import get_user_model
 from .models import Risk, RiskCategory
 from incidents.models import Incident
 from measures.models import Measure
+from controls.models import Control
 from references.models import (
     BaselEventType,
     BusinessUnit,
@@ -40,6 +41,13 @@ class RiskLinkMeasureSerializer(serializers.Serializer):
     measure_id = serializers.PrimaryKeyRelatedField(
         queryset=Measure.objects.all()
     )
+
+
+class RiskLinkControlSerializer(serializers.Serializer):
+    control_id = serializers.PrimaryKeyRelatedField(
+        queryset=Control.objects.all()
+    )
+    notes = serializers.CharField(required=False, allow_blank=True)
 
 
 # --- Core Serializers ---

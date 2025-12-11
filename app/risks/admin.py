@@ -10,6 +10,7 @@ from .models import (
     RiskCategoryToBaselEventType,
     IncidentRisk,
     RiskMeasure,
+    RiskControl,
 )
 
 # --- Inline Admin for M2M Linkages ---
@@ -36,6 +37,14 @@ class RiskMeasureInline(admin.TabularInline):
     model = RiskMeasure
     extra = 0
     raw_id_fields = ("measure",)  # Use a lookup widget
+
+
+class RiskControlInline(admin.TabularInline):
+    """Inline to link/unlink Control directly on the Risk admin page."""
+
+    model = RiskControl
+    extra = 0
+    raw_id_fields = ("control",)  # Use a lookup widget
 
 
 # --- Main Model Admins ---
@@ -132,9 +141,11 @@ class RiskAdmin(admin.ModelAdmin):
     inlines = [
         IncidentRiskInline,
         RiskMeasureInline,
+        RiskControlInline,
     ]  # Manage relationships here
 
 
 # Register the through models to access them directly (optional)
 admin.site.register(IncidentRisk)
 admin.site.register(RiskMeasure)
+admin.site.register(RiskControl)
