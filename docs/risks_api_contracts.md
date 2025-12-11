@@ -117,3 +117,26 @@ These endpoints manage the many-to-many relationships between risks and other en
   * **Permissions:** `Manager`, `Risk Officer`.
   * **Request Body:** `{"measure_id": 456}`
   * **Validation:** Fails if the link does not exist.
+
+* **`POST /api/risks/{id}/link-to-control/`**
+  * **Action:** Links a library control to the risk.
+  * **Permissions:** `Risk Officer` (during validation), `Manager` (during draft assessment).
+  * **Request Body:**
+    ```json
+    {
+      "control_id": 12,
+      "notes": "Primary mitigation for fraud scenario."
+    }
+    ```
+  * **Validation:**
+      * Fails if the Risk is `RETIRED`.
+      * Fails if the Control is `INACTIVE`.
+      * Fails if the Control is already linked to this risk.
+
+* **`POST /api/risks/{id}/unlink-from-control/`**
+  * **Action:** Removes the link between a risk and a control.
+  * **Permissions:** `Risk Officer`, `Manager`.
+  * **Request Body:** `{"control_id": 12}`
+  * **Validation:**
+      * Fails if the Risk is `RETIRED`.
+      * **Integrity Check:** Fails if the Risk is `ACTIVE` and this is the **last** control linked. (Active risks must maintain at least one control).

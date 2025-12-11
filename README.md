@@ -19,15 +19,15 @@ This platform is designed to be the single source of truth for all operational r
 The architecture is designed to support the progressive addition of all core ORM entities:
 * **Incidents:** A system for registering and processing operational risk incidents (loss events), which features an advanced, role-based workflow. ✔️
 * **Risks:** A central register of operational risks, with inherent/residual assessments. ✔️
-* **Controls:** A library of controls to mitigate risks. 🔜
+* **Controls:** A library of controls to mitigate risks. ✔️
 * **Measures:** A log of corrective actions, with deadlines and owners, linked to Incidents or Risks. ✔️
 * **Key Risk Indicators (KRIs):** A system for monitoring metrics against defined thresholds. 🔜
-* **Linkage:** Full many-to-many relationships between all entities (e.g., `incident_risk`, `risk_control`). ✔️
+* **Linkage:** Full many-to-many relationships between entities (e.g., `incident_risk`, `risk_control`). ✔️
 
 Here’s a simplified entity relationship diagram with the main actors, their actions, and their interconnections:
 ![ER Diagram](diagram.png)
 
-### ⛈️ Incidents Management Module
+### ⛈️ ⚡️ 🔍 Incidents Management Module
 
 The first-built module manages the complete lifecycle of operational risk events. Its logic is governed by a sophisticated workflow engine that includes:
 * A role-based, multi-stage state machine (e.g., `DRAFT` -> `PENDING_REVIEW` -> `VALIDATION`).
@@ -35,10 +35,10 @@ The first-built module manages the complete lifecycle of operational risk events
 * Automatic, state-based SLA timer calculation.
 * Asynchronous, rule-based notification routing for awareness (e.g., alerting the Fraud team immediately once Fraud incident is registered), etc.
 
-### ☔️ Measures & ✅ Corrective Actions Module
+### ⚙️ ➡ ✅ ☔️ Measures & Corrective Actions Module
 
 This module manages the lifecycle of corrective and preventive actions. Measures can be linked to Incidents and Risks to track remediation. 
-* It features its own auditable, four-stage workflow (OPEN → IN_PROGRESS → PENDING_REVIEW → COMPLETED), ensuring that actions are verified by a Risk Officer before closure. 
+* It features its own auditable, four-stage workflow (`OPEN` → `IN_PROGRESS` → `PENDING_REVIEW` → `COMPLETED`), ensuring that actions are verified by a Risk Officer before closure. 
 * The API provides dedicated endpoints for state transitions, linking, and logging evidence, with dynamic permissions that lock key fields (like deadline) once work is in progress.
 
 ### ⚠️ ⚡️ 🔍 Risks Module (RCSA)
@@ -50,7 +50,15 @@ The Risks module implements a robust **Risk and Control Self-Assessment (RCSA)**
 * **Scoring Engine:** Automated calculation of Inherent and Residual risk scores based on Likelihood × Impact matrices.
 * **Interconnectivity:** Bi-directional linking with **Incidents** (realized risks), **Measures** (corrective risk mitigations) and **Controls** (preventive mitigations, to be developed).
 
-## Key Features - Incidents Module
+### 🛡️ Controls Module
+
+This module serves as a centralized repository for the organization's defense mechanisms. It is built on a "Library" architecture rather than a transactional workflow, focusing on reusability and standardization.
+* **Centralized Library**: A single source of truth for preventive, detective, and corrective controls, avoiding duplication across business units.
+* **Segregation of Duties**: Only **Risk Officers** can create or modify the library, while **Managers** consume controls to mitigate their specific risks.
+* **Integrity Logic**: Enforces strict dependency rules—controls cannot be deactivated or deleted if they are currently linked to any active risks.
+* **Integration**: Provides the foundational "Defense" layer for the RCSA process, allowing controls to be linked to Risks with specific mitigation notes.
+
+## Key Technical Features - Incidents Module
 
 * **Multi-Stage Incident Workflow:** A state machine that manages an incident's progression (e.g., `DRAFT` -> `PENDING_REVIEW` -> `PENDING_VALIDATION` -> `VALIDATED` -> `CLOSED`).
 * **Role-Based State Transitions:** A data-driven ruleset (`AllowedTransition` model) that defines *which* role (e.g., Manager, Risk Officer) can perform *which* transition.
@@ -103,10 +111,12 @@ For a deeper dive into the system's design and business rules, please see the fo
 ### Documentation - Risks module
 
 * **[Risks Workflow Rules](./docs/risks_workflow_rules.md)**: A complete specification of the risk state machine, SLA logic, and dynamic field rules.
-* **[Risks API Contracts](./docs/risks_api_contracts.md)**: High-level documentation for the main Risk API endpoints and workflow actions.
+* **[Risks API Contracts](./docs/risks_api_contracts.md)**: High-level documentation for the main Risks API endpoints and workflow actions.
 * **[Business Requirements Document (BRD) for the Risks module](./docs/business_requirements_documents/risk_workflow_design_specs.md)**: Presents an analysis of different options considered for a Risk workflow model, and explains what was finally selected and why.
 
 ### Documentation - Controls module
 
+* **[Controls Workflow Rules](./docs/controls_workflow_rules.md)**: A complete specification of the business logic and lifecycle rules for controls (no state machine - a library of assets).
+* **[Controls API Contracts](./docs/controls_api_contracts.md)**: High-level documentation for the main Controls API endpoints (linking is in Risks).
 * **[Business Requirements Document (BRD) for the Controls module, detailed analysis](./docs/business_requirements_documents/controls_design_specs_detailed.md)**: Presents an analysis of different options considered for the Controls app, including code organization, workflows, data models, and explains what was finally selected and why.
 * **[Business Requirements Document (BRD) for the Controls module, Executive Summary](./docs/business_requirements_documents/controls_design_specs_exec_summary.md)**: Presents a clear development path to follow for the Controls app; based on the detailed analysis of pros and cons in the previous BRD.
