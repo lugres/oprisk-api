@@ -18,6 +18,7 @@ from references.models import (
 from users.serializers import UserNestedSerializer
 from incidents.serializers import IncidentListSerializer
 from measures.serializers import MeasureListSerializer
+from controls.serializers import ControlListSerializer
 from references.serializers import BusinessUnitSerializer
 from .workflows import get_editable_fields, get_contextual_role_name
 
@@ -90,12 +91,16 @@ class RiskDetailSerializer(serializers.ModelSerializer):
     measure_count = serializers.IntegerField(
         source="measures.count", read_only=True
     )
+    control_count = serializers.IntegerField(
+        source="controls.count", read_only=True
+    )
 
     # Contextual
     available_transitions = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
     linked_incidents = serializers.SerializerMethodField()
     linked_measures = serializers.SerializerMethodField()
+    linked_controls = serializers.SerializerMethodField()
 
     class Meta:
         model = Risk
@@ -123,8 +128,10 @@ class RiskDetailSerializer(serializers.ModelSerializer):
             "validated_at",
             "incident_count",
             "measure_count",
+            "control_count",
             "linked_incidents",
             "linked_measures",
+            "linked_controls",
             "available_transitions",
             "permissions",
             "retirement_reason",
@@ -145,6 +152,10 @@ class RiskDetailSerializer(serializers.ModelSerializer):
     def get_linked_measures(self, obj):
         """Display linked measures."""
         return MeasureListSerializer(obj.measures.all(), many=True).data
+
+    def get_linked_controls(self, obj):
+        """Display linked controls."""
+        return ControlListSerializer(obj.controls.all(), many=True).data
 
 
 class RiskCreateSerializer(serializers.ModelSerializer):

@@ -1634,6 +1634,21 @@ class RiskResponseFormatTests(RiskTestBase):
         self.assertIn("linked_measures", res.data)
         self.assertEqual(len(res.data["linked_measures"]), 1)
 
+    def test_risk_detail_includes_linked_controls(self):
+        """Test that risk detail includes linked_controls."""
+        self.risk_active.controls.add(
+            self.control_active_simple,
+            through_defaults={"linked_by": self.risk_officer},
+        )
+
+        self.client.force_authenticate(user=self.risk_officer)
+        url = risk_detail_url(self.risk_active.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("linked_controls", res.data)
+        self.assertEqual(len(res.data["linked_controls"]), 1)
+
     def test_risk_detail_includes_computed_scores(self):
         """Test that risk detail includes computed risk scores."""
         self.client.force_authenticate(user=self.risk_officer)
@@ -1661,9 +1676,15 @@ class RiskResponseFormatTests(RiskTestBase):
         self.assertIsNone(res.data["residual_risk_score"])
 
     def test_response_includes_related_entity_counts(self):
-        """Test that counts of related Incidents and Measures are returned."""
+        """
+        Test that counts of related Incidents, Measures, Controls are returned
+        """
         self.risk_draft.incidents.add(self.incident)
         self.risk_draft.measures.add(self.measure)
+        self.risk_draft.controls.add(
+            self.control_active_simple,
+            through_defaults={"linked_by": self.risk_officer},
+        )
 
         self.client.force_authenticate(user=self.manager)
         url = risk_detail_url(self.risk_draft.id)
@@ -1672,6 +1693,7 @@ class RiskResponseFormatTests(RiskTestBase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["incident_count"], 1)
         self.assertEqual(res.data["measure_count"], 1)
+        self.assertEqual(res.data["control_count"], 1)
 
     def test_response_includes_lookup_fields_by_name(self):
         """Test that foreign key fields return the object name/title."""
