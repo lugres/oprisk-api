@@ -6,7 +6,7 @@ In simple terms, **Incidents** module tracks "*what went wrong and why*" and **M
 The **Risks** module describes "_what could potentially go wrong_" and links the elements together.
 **Controls** specify "_how we prevent those potential issues_", while **KRIs** consistently measure "_room's temperature_" - early signals indicating that risk levels are rising.
 
-This project is built on a modular monolithic Django DRF backend, following Domain-Driven Design principles and emphasizing a clean **Service Layer architecture** within each module to separate complex business logic from the interface. This layered design ensures the platform is testable, maintainable, and can be extended to future modules, such as Risks or Controls, with clarity. Additionally, this approach minimizes dependency on Django REST Framework, allowing for the portability of service and domain layers to other frameworks if needed.
+This project is built on a modular monolithic Django DRF backend, following **Domain-Driven Design** principles and emphasizing a clean **Service Layer architecture** within each module to separate complex business logic from the interface. This layered design ensures the platform is testable, maintainable, and can be extended to future modules, such as Risks or Controls, with clarity. Additionally, this approach minimizes dependency on Django REST Framework, allowing for the portability of service and domain layers to other frameworks or shift to microservices if needed.
 
 This project is based on [Oprisk database project](https://github.com/lugres/oprisk-database) - a structured relational database that enables risk managers to record and analyze incidents (loss events), define and assess risks, manage controls and mitigation measures, and monitor key risk indicators (KRIs).
 
@@ -29,13 +29,14 @@ Here’s a simplified entity relationship diagram with the main actors, their ac
 
 ### ⛈️ ⚡️ 🔍 Incidents Management Module
 
-The first-built module manages the complete lifecycle of operational risk events. Its logic is governed by a sophisticated workflow engine that includes:
-* A role-based, multi-stage state machine (e.g., `DRAFT` -> `PENDING_REVIEW` -> `VALIDATION`).
-* Data-driven rules for transitions, required fields, and field-level editability.
-* Automatic, state-based SLA timer calculation.
-* Asynchronous, rule-based notification routing for awareness (e.g., alerting the Fraud team immediately once Fraud incident is registered), etc.
+The Incidents module serves as the organization's system of records for operational loss events (incidents), providing a rigorous, auditable path from initial discovery to final regulatory reporting. It is built on a **Data-Driven Workflow Engine** that enforces a strict separation of duties between **Employees** (Reporting), **Managers** (Review), and **Risk Officers** (Validation). Key capabilities include:
+* **5-Stage State Machine:** A formal, role-based lifecycle (`DRAFT` -> `PENDING_REVIEW` -> `PENDING_VALIDATION` -> `VALIDATED` -> `CLOSED`) ensures every loss event undergoes hierarchical analysis and data enrichment.
+* **Hybrid Taxonomy:** Simplifies data entry for front-line staff using easy to understand "Simplified Event Types" (e.g., "Fraud", "IT / Data / Cyber") that automatically map to complex regulatory **Basel Event Types** for regulatory reporting.
+* **Intelligent Notification Routing:** A predicate-based rules engine that dynamically triggers async notifications for high-impact or specific risk-type incidents to specialized teams (e.g., alerting Fraud team immediately once Fraud incident is registered) without disrupting the baseline workflow (employee → manager → risk team).
+* **Dynamic Data Governance:** Field-level security and requirement rules are configuration-driven, enforcing progressive data disclosure (e.g., financial impact data is required for Validation but optional for Drafts) and locking sensitive fields based on the incident's status and user role.
+* **SLA Management:** Automated calculation of due dates (draft_due_at, review_due_at) ensures timely processing of loss events.
 
-### ⚙️ ➡ ✅ ☔️ Measures & Corrective Actions Module
+### ⚙️ ➡ ✅ = ☔️ Measures Module (Corrective Actions)
 
 This module manages the lifecycle of corrective and preventive actions. Measures can be linked to Incidents and Risks to track remediation. 
 * It features its own auditable, four-stage workflow (`OPEN` → `IN_PROGRESS` → `PENDING_REVIEW` → `COMPLETED`), ensuring that actions are verified by a Risk Officer before closure. 
@@ -101,6 +102,7 @@ For a deeper dive into the system's design and business rules, please see the fo
 
 * **[Incidents Workflow Rules](./docs/incident_workflow_rules.md)**: A complete specification of the incident state machine, SLA logic, and dynamic field rules.
 * **[Incidents API Contracts](./docs/incident_api_contracts.md)**: High-level documentation for the main Incidents API endpoints and workflow actions.
+* **[Business Requirements Document (BRD) for the Incidents module](./docs/business_requirements_documents/incidents_design_specs_detailed.md)**: Describes functional, technical, and architectural requirements for the Incidents module, as well as an analysis of some architectural options considered.
 
 ### Documentation - Measures module
 
