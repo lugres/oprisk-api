@@ -106,7 +106,7 @@ class Control(TimestampedModel, OwnedModel):
         help_text=_("Design effectiveness rating (1-5)"),
     )
 
-    # 4. Context & Ownership
+    # 5. Context & Ownership
     is_active = models.BooleanField(
         default=True,
         help_text=_("Whether this control is currently operational"),
@@ -134,6 +134,9 @@ class Control(TimestampedModel, OwnedModel):
         related_name="owned_controls",
         help_text=_("User responsible for operating/maintaining this control"),
     )
+
+    class Meta:
+        ordering = ["-created_at", "id"]
 
     def clean(self):
         """Enforce hierarchical integrity rules."""

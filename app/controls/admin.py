@@ -8,7 +8,7 @@ from .models import Control
 
 @admin.register(Control)
 class ControlAdmin(admin.ModelAdmin):
-    """Admin interface for the Control Library."""
+    """Admin interface for the Hierarchical Control Library."""
 
     # Organize fields into logical groups
     fieldsets = (
@@ -20,6 +20,19 @@ class ControlAdmin(admin.ModelAdmin):
                     "description",
                     "reference_doc",
                     "is_active",
+                ),
+            },
+        ),
+        (
+            "Hierarchy & Classification",
+            {
+                "fields": (
+                    "control_level",
+                    "parent_control",
+                ),
+                "description": (
+                    "STANDARD controls define organization-wide policies. "
+                    "LOCAL controls are business unit-specific implementations."
                 ),
             },
         ),
@@ -39,6 +52,10 @@ class ControlAdmin(admin.ModelAdmin):
             "Context & Ownership",
             {
                 "fields": ("business_unit", "business_process", "owner"),
+                "description": (
+                    "Business Unit is required for LOCAL controls, "
+                    "should be empty for STANDARD controls."
+                ),
             },
         ),
         (
@@ -53,6 +70,8 @@ class ControlAdmin(admin.ModelAdmin):
     # Columns displayed in the list view
     list_display = (
         "title",
+        "control_level",
+        "parent_control",
         "control_type",
         "control_frequency",
         "effectiveness",
@@ -63,6 +82,7 @@ class ControlAdmin(admin.ModelAdmin):
 
     # Sidebar filters for finding controls quickly
     list_filter = (
+        "control_level",
         "is_active",
         "control_type",
         "control_nature",
@@ -79,7 +99,12 @@ class ControlAdmin(admin.ModelAdmin):
 
     # Optimize FK lookups
     # (Prerequisite: Related admins must have search_fields defined)
-    autocomplete_fields = ("business_unit", "business_process", "owner")
+    autocomplete_fields = (
+        "parent_control",
+        "business_unit",
+        "business_process",
+        "owner",
+    )
 
     def save_model(self, request, obj, form, change):
         """Automatically set created_by on creation."""
