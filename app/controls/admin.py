@@ -32,7 +32,7 @@ class ControlAdmin(admin.ModelAdmin):
                 ),
                 "description": (
                     "STANDARD controls define organization-wide policies. "
-                    "LOCAL controls are business unit-specific implementations."
+                    "LOCAL controls are BU-specific implementations."
                 ),
             },
         ),
