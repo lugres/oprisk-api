@@ -76,6 +76,7 @@ class ControlDetailSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "reference_doc",
+            "control_level",
             "control_type",
             "control_nature",
             "control_frequency",
