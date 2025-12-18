@@ -161,10 +161,14 @@ class ControlCreateUpdateSerializer(serializers.ModelSerializer):
 
     owner = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
     business_unit = serializers.PrimaryKeyRelatedField(
-        queryset=BusinessUnit.objects.all()
+        queryset=BusinessUnit.objects.all(),
+        required=False,
+        allow_null=True,
     )
     business_process = serializers.PrimaryKeyRelatedField(
-        queryset=BusinessProcess.objects.all(), required=False, allow_null=True
+        queryset=BusinessProcess.objects.all(),
+        required=False,
+        allow_null=True,
     )
     parent_control = serializers.PrimaryKeyRelatedField(
         queryset=Control.objects.filter(control_level=ControlLevel.STANDARD),
