@@ -1,7 +1,71 @@
 """
 Domain layer for Controls.
 Defines permission rules and validation logic for control lifecycle.
+Aims to be Django-unaware domain layer; operates on primitives (str, int).
 """
+
+from dataclasses import dataclass
+
+
+@dataclass
+class LinkabilityReason:
+    """Represents a reason why a control can't be linked."""
+
+    code: str
+    message: str
+    suggestion: str
+
+
+class ControlBusinessLogic:
+    """Stateless business logic for controls."""
+
+    @staticmethod
+    def is_control_linkable(control_level: str, is_active: bool) -> bool:
+        """
+        Indicates if this control can be linked to risks.
+        Rule: Only LOCAL, ACTIVE controls are linkable.
+        """
+        return control_level == "LOCAL" and is_active
+
+    @staticmethod
+    def get_linkability_reasons(
+        control_level: str, is_active: bool, control_level_display: str
+    ) -> list[LinkabilityReason]:
+        """
+        Returns detailed information about why a control isn't linkable.
+        Returns empty list if linkable.
+        """
+        reasons = []
+
+        if control_level != "LOCAL":
+            reasons.append(
+                LinkabilityReason(
+                    code="NOT_LOCAL",
+                    message=f"This is a {control_level_display} control."
+                    " Only LOCAL implementations can be linked to risks.",
+                    suggestion="Create a LOCAL implementation in your Business"
+                    " Unit first.",
+                )
+            )
+
+        if not is_active:
+            reasons.append(
+                LinkabilityReason(
+                    code="INACTIVE",
+                    message="This control is inactive.",
+                    suggestion="Activate the control before linking.",
+                )
+            )
+
+        return reasons
+
+    @staticmethod
+    def validate_deactivation(risk_statuses: list[str]) -> bool:
+        """
+        Validates if control can be deactivated based on linked risks status.
+        Rule: Cannot deactivate control if it is linked to any ACTIVE risks.
+        """
+        return "ACTIVE" not in risk_statuses
 
 
 class ControlPermissionError(Exception):
@@ -84,12 +148,3 @@ def can_edit_control(user, control) -> bool:
         )
 
     return False
-
-
-def validate_deactivation_allowed(risk_statuses: list) -> bool:
-    """
-    Validates if a control can be deactivated based on linked risks statuses.
-    Rule: Cannot deactivate control if it is linked to any ACTIVE risks.
-    """
-    # Check if any risk is ACTIVE (status code "ACTIVE")
-    return "ACTIVE" not in risk_statuses

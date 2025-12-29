@@ -12,6 +12,8 @@ from django.utils.translation import gettext_lazy as _
 from core.models import TimestampedModel, OwnedModel
 from references.models import BusinessProcess, BusinessUnit
 
+from .workflows import ControlBusinessLogic
+
 
 class ControlLevel(models.TextChoices):
     STANDARD = "STANDARD", _("Standard (Organization-wide)")
@@ -204,6 +206,31 @@ class Control(TimestampedModel, OwnedModel):
         for child in list(children):
             children.extend(child.get_all_children())
         return children
+
+    @property
+    def is_linkable(self) -> bool:
+        """
+        Indicates if this control can be linked to risks.
+        Rule: Only LOCAL, ACTIVE controls are linkable.
+        Convenience property that delegates to pure domain logic.
+        Adapter pattern: converts model state to primitives.
+        """
+        return ControlBusinessLogic.is_control_linkable(
+            self.control_level, self.is_active
+        )
+
+    def get_linkability_reasons(self) -> list:
+        """
+        Returns detailed information about why a control isn't linkable.
+        Returns list of LinkabilityReason objects.
+        Convenience property that delegates to pure domain logic.
+        Adapter pattern: converts model state to primitives.
+        """
+        return ControlBusinessLogic.get_linkability_reasons(
+            self.control_level,
+            self.is_active,
+            self.get_control_level_display(),
+        )
 
     def __str__(self):
         prefix = (

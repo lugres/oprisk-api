@@ -16,6 +16,12 @@ class RiskPermissionError(Exception):
     pass
 
 
+class RiskValidationError(Exception):
+    """Custom exception for business logic validation failures on risks."""
+
+    pass
+
+
 # --- 1. Transition Validation ---
 
 # Map status strings to role requirements
@@ -188,6 +194,14 @@ def can_user_add_comment(risk, user) -> bool:
     return is_owner or is_creator or is_owner_mgr or is_creator_mgr
 
 
+def can_user_link_controls(user_role: str) -> bool:
+    """
+    Pure domain rule: Who can link/unlink controls?
+    Only Risk Officers can manage control-risk links.
+    """
+    return user_role == "Risk Officer"
+
+
 def get_editable_fields(risk_status: str, user_role: str) -> set:
     """
     [PURE DOMAIN LOGIC]
@@ -256,3 +270,71 @@ def get_editable_fields(risk_status: str, user_role: str) -> set:
         pass
 
     return editable
+
+
+# --- link/unlink risk-control validation helpers ---
+
+
+def validate_bu_alignment_for_control_linking(
+    control_bu_id: int,
+    control_bu_name: str,
+    risk_bu_id: int,
+    risk_bu_name: str,
+    is_group_ro: bool,
+) -> tuple[bool, str]:
+    """
+    Pure domain: BU alignment rule.
+    Returns: (is_valid, error_message)
+
+    Rule: Control can be linked to Risk if:
+    - Control BU matches Risk BU, OR
+    - User is Group Risk Officer (bypass)
+    """
+
+    if is_group_ro or control_bu_id == risk_bu_id:
+        return (True, "")
+    return (
+        False,
+        f"Control is in {control_bu_name} but risk is in {risk_bu_name}. "
+        "Controls must be in same BU as risk.",
+    )
+
+
+def validate_risk_status_for_linking(risk_status: str) -> tuple[bool, str]:
+    """
+    Pure domain rule: Risk status check for linking.
+
+    Returns: (is_valid, error_message)
+    """
+    if risk_status == "RETIRED":
+        return (False, "Cannot link controls to RETIRED risks.")
+
+    if risk_status not in ["DRAFT", "ASSESSED"]:
+        return (
+            False,
+            f"Can only link controls to risks in DRAFT or ASSESSED status. "
+            f"Current status: {risk_status}",
+        )
+
+    return (True, "")
+
+
+def validate_risk_status_for_unlinking(
+    risk_status: str, remaining_controls_count: int
+) -> tuple[bool, str]:
+    """
+    Pure domain rule: Risk status and control count check for unlinking.
+
+    Returns: (is_valid, error_message)
+    """
+    if risk_status == "RETIRED":
+        return (False, "Cannot unlink controls from RETIRED risks.")
+
+    if risk_status == "ACTIVE" and remaining_controls_count == 0:
+        return (
+            False,
+            "Cannot unlink last control from ACTIVE risk. "
+            "At least one control must remain.",
+        )
+
+    return (True, "")

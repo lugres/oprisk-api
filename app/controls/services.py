@@ -12,13 +12,13 @@ from risks.models import RiskStatus
 from .workflows import (
     ControlPermissionError,
     ControlValidationError,
+    ControlBusinessLogic,
     is_bu_risk_officer,
     is_group_risk_officer,
     is_manager,
     can_create_standard_control,
     can_create_local_control,
     can_edit_control,
-    validate_deactivation_allowed,
 )
 
 User = get_user_model()
@@ -207,7 +207,9 @@ def update_control(
             control.risks.values_list("status", flat=True)
         )
         # Call pure domain function
-        if not validate_deactivation_allowed(linked_risk_statuses):
+        if not ControlBusinessLogic.validate_deactivation(
+            linked_risk_statuses
+        ):
             raise ControlValidationError(
                 "Cannot deactivate control linked to ACTIVE risks."
             )
