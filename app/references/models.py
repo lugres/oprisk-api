@@ -12,6 +12,9 @@ class Role(models.Model):
     name = models.CharField(max_length=50, unique=True)
     description = models.TextField(blank=True, null=True)
 
+    class Meta:
+        ordering = ["name", "id"]
+
     def __str__(self):
         return self.name
 
@@ -24,6 +27,9 @@ class BusinessUnit(models.Model):
     parent = models.ForeignKey(
         "self", on_delete=models.SET_NULL, null=True, blank=True
     )
+
+    class Meta:
+        ordering = ["name", "id"]
 
     def __str__(self):
         return self.name
@@ -39,6 +45,7 @@ class BaselBusinessLine(models.Model):
     )
 
     class Meta:
+        ordering = ["name", "id"]
         verbose_name = "Basel Business Line"
         verbose_name_plural = "Basel Business Lines"
 
@@ -56,6 +63,7 @@ class BaselEventType(models.Model):
     )
 
     class Meta:
+        ordering = ["name", "id"]
         verbose_name = "Basel Event Type"
         verbose_name_plural = "Basel Event Types"
 
@@ -76,6 +84,7 @@ class BusinessProcess(models.Model):
     )
 
     class Meta:
+        ordering = ["name", "id"]
         verbose_name = "Business Process"
         verbose_name_plural = "Business Processes"
 
@@ -91,6 +100,9 @@ class Product(models.Model):
     business_unit = models.ForeignKey(
         BusinessUnit, on_delete=models.SET_NULL, blank=True, null=True
     )
+
+    class Meta:
+        ordering = ["name", "id"]
 
     def __str__(self):
         return self.name

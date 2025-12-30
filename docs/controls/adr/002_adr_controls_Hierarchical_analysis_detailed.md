@@ -1,5 +1,9 @@
 # Architectural Decision Record: Control Library Governance Model
 
+> **📌 IMPLEMENTATION STATUS:**  
+> The hierarchical model described in this ADR has been **implemented** as of December 30, 2025.  
+> See [CHANGELOG.md](../../../CHANGELOG.md) for implementation details and current behavior.
+
 **Document Type:** Architectural Decision Record (ADR)  
 **Project:** Operational Risk Management Platform - Controls Module  
 **ADR Number:** ADR-002  

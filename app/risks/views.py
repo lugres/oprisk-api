@@ -13,7 +13,11 @@ from django.contrib.auth import get_user_model
 from .models import Risk
 from . import serializers
 from . import services
-from .workflows import RiskTransitionError, RiskPermissionError
+from .workflows import (
+    RiskTransitionError,
+    RiskPermissionError,
+    RiskValidationError,
+)
 from .filters import RiskFilter
 
 
@@ -382,6 +386,7 @@ class RiskViewSet(viewsets.ModelViewSet):
         """Action to link a control to the risk."""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
         try:
             services.link_control(
                 risk=self.get_object(),
@@ -389,8 +394,15 @@ class RiskViewSet(viewsets.ModelViewSet):
                 control=serializer.validated_data["control_id"],
                 notes=serializer.validated_data.get("notes", ""),
             )
-            return Response({"status": "linked"}, status=status.HTTP_200_OK)
-        except RiskTransitionError as e:
+            return Response(
+                {"status": "Control linked successfully."},
+                status=status.HTTP_200_OK,
+            )
+        except RiskPermissionError as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_403_FORBIDDEN
+            )
+        except RiskValidationError as e:
             # The test expects 400 for "inactive" or "already linked"
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
@@ -406,14 +418,22 @@ class RiskViewSet(viewsets.ModelViewSet):
         """Action to unlink a control from the risk."""
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
         try:
             services.unlink_control(
                 risk=self.get_object(),
                 user=self._get_fully_loaded_user(),
                 control=serializer.validated_data["control_id"],
             )
-            return Response({"status": "unlinked"}, status=status.HTTP_200_OK)
-        except RiskTransitionError as e:
+            return Response(
+                {"status": "Control unlinked successfully."},
+                status=status.HTTP_200_OK,
+            )
+        except RiskPermissionError as e:
+            return Response(
+                {"error": str(e)}, status=status.HTTP_403_FORBIDDEN
+            )
+        except RiskValidationError as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )

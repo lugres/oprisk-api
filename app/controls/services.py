@@ -7,13 +7,18 @@ from django.db import transaction
 from django.db.models import Q
 from django.contrib.auth import get_user_model
 
-from .models import Control
+from .models import Control, ControlLevel
 from risks.models import RiskStatus
 from .workflows import (
     ControlPermissionError,
     ControlValidationError,
-    can_user_modify_library,
-    validate_deactivation_allowed,
+    ControlBusinessLogic,
+    is_bu_risk_officer,
+    is_group_risk_officer,
+    is_manager,
+    can_create_standard_control,
+    can_create_local_control,
+    can_edit_control,
 )
 
 User = get_user_model()
@@ -25,16 +30,16 @@ def get_control_context(control: Control, user: User) -> dict:
     Returns permissions and metadata specific to this user/control.
     """
     # 1. Calculate Permissions
-    is_ro = can_user_modify_library(user)
+    can_edit = can_edit_control(user, control)
 
     # Check if linked to any ACTIVE risks (blocking deactivation)
     # control.risks is the related_name from Risk.controls M2M
     has_active_risks = control.risks.filter(status=RiskStatus.ACTIVE).exists()
 
     permissions = {
-        "can_edit": is_ro,
+        "can_edit": can_edit,
         # Deactivation is allowed only for ROs AND if no active links exist
-        "can_deactivate": is_ro and not has_active_risks,
+        "can_deactivate": can_edit and not has_active_risks,
         "can_delete": False,  # Hard delete is never allowed in this API
     }
 
@@ -54,56 +59,121 @@ def get_control_visibility_filter(user) -> Q:
     Returns a Q object for filtering controls based on user role and context.
 
     Business Rules:
-    - Risk Officer:
-        - All controls in their Business Unit (active and inactive).
+    - Central/Group Risk Officer:
+        - All STANDARD, all LOCAL controls across organization.
+    - BU Risk Officer:
+        - All STANDARD, all LOCAL controls in their BU (active and inactive).
+        - All LOCAL controls linked to risks in their BU.
     - Manager:
-        - Active controls in their Business Unit.
-        - Active controls linked to Risks they own (even if in other BUs).
+        - All STANDARD controls.
+        - Active LOCAL controls in their Business Unit.
+        - Active LOCAL controls linked to Risks they own (also in other BUs).
     - Employee:
-        - Active controls in their Business Unit.
-        - Active controls linked to Risks in their Business Unit.
+        - All STANDARD controls.
+        - Active LOCAL controls in their Business Unit.
+        - Active LOCAL controls linked to Risks in their Business Unit.
     """
     if not user or not user.role:
         return Q(pk__in=[])
 
-    # 1. Risk Officer: View ALL in their BU (Library Maintenance scope)
-    if user.role.name == "Risk Officer":
-        return Q(business_unit=user.business_unit) | Q(
-            risks__business_unit=user.business_unit
-        )  # See all in BU and linked
+    # 1. Central/Group Risk Officer (God View)
+    if is_group_risk_officer(user):
+        return Q()
 
-    # 2. Base Filter for Manager/Employee: Control Must be Active
-    base_filter = Q(is_active=True)
+    # 1.1 STANDARD controls visible to all
+    standard = Q(control_level=ControlLevel.STANDARD)
 
-    # 3. Manager Logic
-    if user.role.name == "Manager":
-        # Rule A: In their BU
-        bu_filter = Q(business_unit=user.business_unit)
+    # 2. BU Risk Officer: (Standard + Local in BU + Linked to risks)
+    if is_bu_risk_officer(user):
+        return (
+            standard
+            | Q(
+                control_level=ControlLevel.LOCAL,
+                business_unit=user.business_unit,
+            )
+            | Q(
+                control_level=ControlLevel.LOCAL,
+                risks__business_unit=user.business_unit,
+            )
+        )  # Can see STANDARD, all LOCAL in BU and linked
+
+    # 3. Base Filter for Manager/Employee: Control Must be LOCAL and Active
+    base_local_filter = Q(
+        control_level=ControlLevel.LOCAL,
+        is_active=True,
+    )
+    # 3.1 Rule A: In their BU
+    bu_filter = Q(business_unit=user.business_unit)
+
+    # 4. Manager Logic
+    if is_manager(user):
         # Rule B: Linked to risks they own (Cross-BU visibility exception)
         # 'risks' is the related_name from Risk.controls M2M
-        risk_link_filter = Q(risks__owner=user)
+        risk_link_filter = Q(risks__owner=user) | Q(
+            risks__business_unit=user.business_unit
+        )
 
-        return base_filter & (bu_filter | risk_link_filter)
+        # (Standard) OR (Local+Active AND (In BU OR Linked + to Owned Risk))
+        return standard | base_local_filter & (bu_filter | risk_link_filter)
 
-    # 4. Employee Logic (Default)
-    # Rule A: In their BU
-    bu_filter = Q(business_unit=user.business_unit)
+    # 5. Employee Logic (Default)
     # Rule B: Linked to risks in their BU (Contextual visibility)
     risk_link_filter = Q(risks__business_unit=user.business_unit)
 
-    return base_filter & (bu_filter | risk_link_filter)
+    # (Standard) OR (Local+Active AND (In BU OR Linked to BU Risk))
+    return standard | base_local_filter & (bu_filter | risk_link_filter)
 
 
 @transaction.atomic
-def create_control(*, user: User, **validated_data) -> Control:
+def create_standard_control(*, user: User, **validated_data) -> Control:
+    """Factory for Standard Controls."""
+    if not can_create_standard_control(user):
+        raise ControlPermissionError(
+            "Only Group Risk Officers can create standard controls."
+        )
+
+    # Enforce Standard properties
+    validated_data["business_unit"] = None
+    validated_data["control_level"] = ControlLevel.STANDARD
+    validated_data["parent_control"] = None
+
+    control = Control(created_by=user, **validated_data)
+    control.full_clean()  # Trigger model validation
+    control.save()
+    return control
+
+
+@transaction.atomic
+def create_local_control(*, user: User, **validated_data) -> Control:
     """
-    Creates a new control in the library.
+    Factory for Local Controls.
     """
-    if not can_user_modify_library(user):
-        raise ControlPermissionError("Only Risk Officers can create controls.")
+    if not can_create_local_control(user):
+        raise ControlPermissionError(
+            "Only Risk Officers can create local controls."
+        )
+
+    # Enforce Local properties
+    validated_data["control_level"] = ControlLevel.LOCAL
+
+    # Get the target BU from request or default to user's BU
+    target_bu = validated_data.get("business_unit")
+
+    # Security: BU ROs can only create in their own BU
+    if is_bu_risk_officer(user):
+        # BU RO: Force their BU, ignore any input
+        validated_data["business_unit"] = user.business_unit
+    elif target_bu is None:
+        # Group RO forgot to specify BU - require it
+        raise ControlValidationError(
+            "business_unit is required for LOCAL controls."
+        )
+    # else: Group RO specified a BU, allow it
 
     # Automatically set created_by
-    control = Control.objects.create(created_by=user, **validated_data)
+    control = Control(created_by=user, **validated_data)
+    control.full_clean()  # Trigger model validation (checks parent existence)
+    control.save()
     return control
 
 
@@ -115,8 +185,19 @@ def update_control(
     Updates an existing control.
     Enforces validation if deactivating.
     """
-    if not can_user_modify_library(user):
-        raise ControlPermissionError("Only Risk Officers can edit controls.")
+    if not can_edit_control(user, control):
+        raise ControlPermissionError(
+            "You do not have permission to edit this control."
+        )
+
+    # Check for attempted structural changes
+    forbidden_fields = ["control_level", "parent_control", "business_unit"]
+    attempted_changes = [f for f in forbidden_fields if f in validated_data]
+
+    if attempted_changes:
+        raise ControlValidationError(
+            f"Cannot modify structural fields: {', '.join(attempted_changes)}"
+        )
 
     # Check if we are attempting to deactivate
     is_active_update = validated_data.get("is_active")
@@ -126,7 +207,9 @@ def update_control(
             control.risks.values_list("status", flat=True)
         )
         # Call pure domain function
-        if not validate_deactivation_allowed(linked_risk_statuses):
+        if not ControlBusinessLogic.validate_deactivation(
+            linked_risk_statuses
+        ):
             raise ControlValidationError(
                 "Cannot deactivate control linked to ACTIVE risks."
             )
@@ -134,6 +217,7 @@ def update_control(
     for field, value in validated_data.items():
         setattr(control, field, value)
 
+    control.full_clean()
     control.save()
     return control
 

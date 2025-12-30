@@ -53,11 +53,11 @@ The Risks module implements a robust **Risk and Control Self-Assessment (RCSA)**
 
 ### 🛡️ Controls Module
 
-This module serves as a centralized repository for the organization's defense mechanisms. It is built on a "Library" architecture rather than a transactional workflow, focusing on reusability and standardization.
-* **Centralized Library**: A single source of truth for preventive, detective, and corrective controls, avoiding duplication across business units.
-* **Segregation of Duties**: Only **Risk Officers** can create or modify the library, while **Managers** consume controls to mitigate their specific risks.
-* **Integrity Logic**: Enforces strict dependency rules—controls cannot be deactivated or deleted if they are currently linked to any active risks.
-* **Integration**: Provides the foundational "Defense" layer for the RCSA process, allowing controls to be linked to Risks with specific mitigation notes.
+This module serves as a centralized repository for the organization's defense mechanisms. It is built on a **hierarchical architecture** with STANDARD controls (organization-wide policies) and LOCAL controls (business unit implementations), focusing on reusability and standardization.
+* **Centralized Library**: STANDARD controls provide organization-wide policy definitions, while LOCAL controls implement these standards in specific business unit contexts (preventive, detective, and corrective controls), avoiding duplication and ensuring consistency.
+* **Governance Model**: **Group Risk Officers** manage STANDARD controls visible across all business units, while **BU Risk Officers** create LOCAL implementations within their units, inheriting from STANDARD parents.
+* **Integrity Logic**: Enforces hierarchical validation (LOCAL controls must reference STANDARD parents) and dependency rules—controls cannot be deactivated or deleted if linked to active risks. Only LOCAL controls can be linked to risks.
+* **Integration**: Provides the foundational "Defense" layer for the RCSA process, allowing LOCAL controls to be linked to Risks with specific mitigation notes.
 
 ## Key Technical Features - Incidents Module
 
@@ -76,6 +76,34 @@ This project strictly follows a 3-layer architectural pattern to manage complexi
 1.  **Interface Layer (Views):** Thin `ViewSet` is responsible for HTTP handling, authentication, and permission checks.
 2.  **Application Layer (Services):** Orchestrates business tasks. This is where multiple components are coordinated (e.g., "submit an incident" means *validating fields*, *running workflow*, *setting SLA*, and *assigning a user*).
 3.  **Domain Layer (Workflow):** Pure, isolated Python modules that contain the core business rules (e.g., `is_transition_allowed?`).
+
+
+**Schema of the Current Design :**
+
+┌─────────────────────────────────────────────────┐
+│ workflows.py (Domain Layer)                     │
+│ - Pure business logic                           │
+│ - No Django imports                             │
+│ - Operates on primitives (str, int, bool)       │
+│ - No side effects, no exceptions (ideally)      │
+└─────────────────────────────────────────────────┘
+                    ▲
+                    │
+┌─────────────────────────────────────────────────┐
+│ services.py (Application Layer)                 │
+│ - Django-aware orchestrator                     │
+│ - Calls domain layer for validation             │
+│ - Handles transactions, ORM queries             │
+│ - Raises application exceptions                 │
+└─────────────────────────────────────────────────┘
+                    ▲
+                    │
+┌─────────────────────────────────────────────────┐
+│ views.py/serializers.py (Interface Layer)       │
+│ - HTTP request/response, serialization          │
+│ - Calls services in try/except blocks           │
+│ - Converts exceptions to HTTP responses         │
+└─────────────────────────────────────────────────┘
 
 This separation ensures that complex business logic is not coupled to the Django framework or the HTTP interface, making it highly maintainable and testable.
 
@@ -100,25 +128,25 @@ For a deeper dive into the system's design and business rules, please see the fo
 
 ### Documentation - Incidents module
 
-* **[Incidents Workflow Rules](./docs/incident_workflow_rules.md)**: A complete specification of the incident state machine, SLA logic, and dynamic field rules.
-* **[Incidents API Contracts](./docs/incident_api_contracts.md)**: High-level documentation for the main Incidents API endpoints and workflow actions.
-* **[Business Requirements Document (BRD) for the Incidents module](./docs/business_requirements_documents/incidents_design_specs_detailed.md)**: Describes functional, technical, and architectural requirements for the Incidents module, as well as an analysis of some architectural options considered.
+* **[Incidents Workflow Rules](./docs/incidents/incident_workflow_rules.md)**: A complete specification of the incident state machine, SLA logic, and dynamic field rules.
+* **[Incidents API Contracts](./docs/incidents/incident_api_contracts.md)**: High-level documentation for the main Incidents API endpoints and workflow actions.
+* **[Business Requirements Document (BRD) for the Incidents module](./docs/incidents/brd/incidents_design_specs_detailed.md)**: Describes functional, technical, and architectural requirements for the Incidents module, as well as an analysis of some architectural options considered.
 
 ### Documentation - Measures module
 
-* **[Measures Workflow Rules](./docs/measure_workflow_rules.md)**: A complete specification of the measure state machine, SLA logic, and dynamic field rules.
-* **[Measures API Contracts](./docs/measure_api_contracts.md)**: High-level documentation for the main Measures API endpoints and workflow actions.
-* **[Architecture Decision Record (ADR) document for permission enforcement strategy in Measures](./docs/architectural_decision_records/001_adr_measures_permissions.md)**: Outlines how a robust permission enforcement mechanism is implemented in the Measures module within Service-Layer Gateway Pattern, and explains why DRF-native permission classes were not used.
+* **[Measures Workflow Rules](./docs/measures/measure_workflow_rules.md)**: A complete specification of the measure state machine, SLA logic, and dynamic field rules.
+* **[Measures API Contracts](./docs/measures/measure_api_contracts.md)**: High-level documentation for the main Measures API endpoints and workflow actions.
+* **[Architecture Decision Record (ADR) document for permission enforcement strategy in Measures](./docs/measures/adr/001_adr_measures_permissions.md)**: Outlines how a robust permission enforcement mechanism is implemented in the Measures module within Service-Layer Gateway Pattern, and explains why DRF-native permission classes were not used.
 
 ### Documentation - Risks module
 
-* **[Risks Workflow Rules](./docs/risks_workflow_rules.md)**: A complete specification of the risk state machine, SLA logic, and dynamic field rules.
-* **[Risks API Contracts](./docs/risks_api_contracts.md)**: High-level documentation for the main Risks API endpoints and workflow actions.
-* **[Business Requirements Document (BRD) for the Risks module](./docs/business_requirements_documents/risk_workflow_design_specs.md)**: Presents an analysis of different options considered for a Risk workflow model, and explains what was finally selected and why.
+* **[Risks Workflow Rules](./docs/risks/risks_workflow_rules.md)**: A complete specification of the risk state machine, SLA logic, and dynamic field rules.
+* **[Risks API Contracts](./docs/risks/risks_api_contracts.md)**: High-level documentation for the main Risks API endpoints and workflow actions.
+* **[Business Requirements Document (BRD) for the Risks module](./docs/risks/brd/risk_workflow_design_specs.md)**: Presents an analysis of different options considered for a Risk workflow model, and explains what was finally selected and why.
 
 ### Documentation - Controls module
 
-* **[Controls Workflow Rules](./docs/controls_workflow_rules.md)**: A complete specification of the business logic and lifecycle rules for controls (no state machine - a library of assets).
-* **[Controls API Contracts](./docs/controls_api_contracts.md)**: High-level documentation for the main Controls API endpoints (linking is in Risks).
-* **[Business Requirements Document (BRD) for the Controls module, detailed analysis](./docs/business_requirements_documents/controls_design_specs_detailed.md)**: Presents an analysis of different options considered for the Controls app, including code organization, workflows, data models, and explains what was finally selected and why.
-* **[Business Requirements Document (BRD) for the Controls module, Executive Summary](./docs/business_requirements_documents/controls_design_specs_exec_summary.md)**: Presents a clear development path to follow for the Controls app; based on the detailed analysis of pros and cons in the previous BRD.
+* **[Controls Workflow Rules](./docs/controls/controls_workflow_rules.md)**: A complete specification of the business logic and lifecycle rules for controls (no state machine - a library of assets).
+* **[Controls API Contracts](./docs/controls/controls_api_contracts.md)**: High-level documentation for the main Controls API endpoints (linking is in Risks).
+* **[Business Requirements Document (BRD) for the Controls module, detailed analysis](./docs/controls/brd/controls_design_specs_detailed.md)**: Presents an analysis of different options considered for the Controls app, including code organization, workflows, data models, and explains what was finally selected and why.
+* **[Business Requirements Document (BRD) for the Controls module, Executive Summary](./docs/controls/brd/controls_design_specs_exec_summary.md)**: Presents a clear development path to follow for the Controls app; based on the detailed analysis of pros and cons in the previous BRD.

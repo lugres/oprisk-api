@@ -1,5 +1,15 @@
 # Controls Module Business Requirements Document
 
+> **📌 STATUS UPDATE (December 2025):**  
+> This document describes the original flat control model requirements.  
+> The system was subsequently refactored to implement a **Hierarchical Control Model** with STANDARD and LOCAL controls.  
+> See [CHANGELOG.md](../../../CHANGELOG.md) for implementation details and [ADR-002](../adr/002_adr_controls_Hierarchical_analysis_detailed.md) for architectural analysis.
+
+**Document Type:** Business Requirements Document (Historical)  
+**Status:** Superseded - Retained for Historical Reference
+
+---
+
 **Document Type:** Business Requirements Document  
 **Project:** Operational Risk Management Platform - Controls Module  
 **Version:** 1.0  

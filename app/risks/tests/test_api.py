@@ -22,6 +22,7 @@ from controls.models import (
     ControlType,
     ControlNature,
     ControlFrequency,
+    ControlLevel,
 )
 from references.models import (
     BaselEventType,
@@ -164,6 +165,11 @@ class RiskTestBase(TestCase):
             self.bu_ops,
             self.manager,
         )
+        # Group/Central Risk Officer
+        # (operates STANDARD controls, can link across BU)
+        self.group_risk_officer = create_user(
+            "gro@example.com", "passt123", self.role_risk, self.bu_risk
+        )
 
         # --- Users in BU Finance to test risk-control linking
         self.risk_officer_fin = create_user(
@@ -199,13 +205,34 @@ class RiskTestBase(TestCase):
         )
 
         # --- Controls for linking ---
-        self.control_active = Control.objects.create(
-            title="Dual Signature",
-            description="Checks > $10k require 2 signatures",
+
+        self.standard_control_fin = Control.objects.create(
+            title="Group Dual Signature Policy",
+            description=(
+                "Organization-wide policy: Checks > $10k require 2 signatures"
+            ),
             control_type=ControlType.PREVENTIVE,
             control_nature=ControlNature.MANUAL,
             control_frequency=ControlFrequency.AD_HOC,
             effectiveness=5,
+            control_level=ControlLevel.STANDARD,
+            business_unit=None,  # STANDARD has no BU
+            owner=self.group_risk_officer,
+            is_active=True,
+            created_by=self.group_risk_officer,
+        )
+
+        self.control_active = Control.objects.create(
+            title="Finance Dual Signature",
+            description=(
+                "Finance implementation: Checks > $10k require 2 signatures"
+            ),
+            control_type=ControlType.PREVENTIVE,
+            control_nature=ControlNature.MANUAL,
+            control_frequency=ControlFrequency.AD_HOC,
+            control_level=ControlLevel.LOCAL,  # ← LOCAL
+            parent_control=self.standard_control_fin,  # ← Parent link
+            effectiveness=4,
             business_unit=self.bu_finance,
             business_process=self.process_ap,
             owner=self.manager_fin,
@@ -217,6 +244,8 @@ class RiskTestBase(TestCase):
             title="Legacy Log",
             description="Deprecated manual log",
             control_type=ControlType.DETECTIVE,
+            control_level=ControlLevel.LOCAL,  # ← LOCAL
+            parent_control=self.standard_control_fin,  # ← Parent link
             business_unit=self.bu_finance,
             owner=self.manager_fin,
             is_active=False,
@@ -227,6 +256,8 @@ class RiskTestBase(TestCase):
             title="Simple control",
             description="Specifically for 'approve'-related tests",
             control_type=ControlType.PREVENTIVE,
+            control_level=ControlLevel.LOCAL,  # ← LOCAL
+            parent_control=self.standard_control_fin,  # ← Parent link
             effectiveness=5,
             business_unit=self.bu_ops,
             owner=self.manager,
@@ -1257,6 +1288,27 @@ class RiskLinkingTests(RiskTestBase):
         )
         self.assertEqual(link.notes, "Primary mitigation for fraud")
         self.assertEqual(link.linked_by, self.risk_officer_fin)
+
+    def test_cannot_link_standard_control_to_risk(self):
+        """Test that STANDARD controls cannot be linked to risks."""
+        self.client.force_authenticate(user=self.risk_officer_fin)
+        url = risk_action_url(self.risk_fin_draft.id, "link-to-control")
+        payload = {"control_id": self.standard_control_fin.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("LOCAL", str(res.data))
+        self.assertIn("implementation", str(res.data).lower())
+
+    def test_manager_cannot_link_control(self):
+        """Test that Managers cannot link controls (only Risk Officers can)."""
+        self.client.force_authenticate(user=self.manager_fin)
+        url = risk_action_url(self.risk_fin_draft.id, "link-to-control")
+        payload = {"control_id": self.control_active.id}
+        res = self.client.post(url, payload)
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Risk Officer", str(res.data))
 
     def test_link_inactive_control_fails(self):
         """Test cannot link an INACTIVE control to a risk."""

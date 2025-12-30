@@ -5,7 +5,8 @@ Serializers for the Controls API.
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
-from .models import Control
+from .models import Control, ControlNature, ControlLevel
+from .workflows import is_group_risk_officer
 from references.models import BusinessUnit, BusinessProcess
 from users.serializers import UserNestedSerializer
 
@@ -21,12 +22,19 @@ class ControlListSerializer(serializers.ModelSerializer):
     business_unit_name = serializers.CharField(
         source="business_unit.name", read_only=True
     )
+    # parent control title for readability
+    parent_control_title = serializers.CharField(
+        source="parent_control.title", read_only=True, allow_null=True
+    )
 
     class Meta:
         model = Control
         fields = [
             "id",
             "title",
+            "control_level",
+            "parent_control",
+            "parent_control_title",
             "control_type",
             "control_nature",
             "control_frequency",
@@ -39,10 +47,22 @@ class ControlListSerializer(serializers.ModelSerializer):
 
 
 class ControlDetailSerializer(serializers.ModelSerializer):
-    """Full detail serializer with context."""
+    """Full detail serializer with context and hierarchy."""
 
     owner = UserNestedSerializer(read_only=True)
     created_by = UserNestedSerializer(read_only=True)
+
+    # hierarchy
+    parent_control = serializers.SerializerMethodField()
+    child_controls = serializers.SerializerMethodField()
+    inheritance_chain = serializers.SerializerMethodField()
+
+    # explicit for control nature (based on data model default)
+    control_nature = serializers.ChoiceField(
+        choices=ControlNature.choices,
+        default=ControlNature.MANUAL,
+        required=False,
+    )
 
     # Contextual Fields
     permissions = serializers.SerializerMethodField()
@@ -56,6 +76,7 @@ class ControlDetailSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "reference_doc",
+            "control_level",
             "control_type",
             "control_nature",
             "control_frequency",
@@ -64,12 +85,63 @@ class ControlDetailSerializer(serializers.ModelSerializer):
             "business_unit",
             "business_process",
             "owner",
+            "parent_control",
+            "child_controls",
+            "inheritance_chain",
             "created_by",
             "created_at",
             "updated_at",
             "permissions",
             "linked_risks_count",
             "active_risks_count",
+        ]
+
+    def get_parent_control(self, obj):
+        """Get control's parent."""
+        if obj.parent_control:
+            return {
+                "id": obj.parent_control.id,
+                "title": obj.parent_control.title,
+                "control_level": obj.parent_control.control_level,
+            }
+        return None
+
+    def get_child_controls(self, obj):
+        """Show active local implementations."""
+        if obj.control_level != ControlLevel.STANDARD:
+            return []
+
+        # Get the requesting user from context
+        request = self.context.get("request")
+        if not request or not request.user:
+            return []
+
+        user = request.user
+        children = obj.child_controls.filter(is_active=True)
+
+        # Apply same visibility rules as main queryset
+        # Group RO: See all (no filter)
+        if not is_group_risk_officer(user):
+            # BU RO and Manager/Employee:: Only see children in their BU
+            children = children.filter(business_unit=user.business_unit)
+
+        return [
+            {
+                "id": c.id,
+                "title": c.title,
+                "business_unit": (
+                    c.business_unit.name if c.business_unit else "N/A"
+                ),
+            }
+            for c in children
+        ]
+
+    def get_inheritance_chain(self, obj):
+        """Get control's inheritance chain."""
+        chain = obj.get_inheritance_chain()
+        return [
+            {"id": c.id, "title": c.title, "level": c.control_level}
+            for c in chain
         ]
 
     def get_permissions(self, obj):
@@ -90,10 +162,19 @@ class ControlCreateUpdateSerializer(serializers.ModelSerializer):
 
     owner = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
     business_unit = serializers.PrimaryKeyRelatedField(
-        queryset=BusinessUnit.objects.all()
+        queryset=BusinessUnit.objects.all(),
+        required=False,
+        allow_null=True,
     )
     business_process = serializers.PrimaryKeyRelatedField(
-        queryset=BusinessProcess.objects.all(), required=False, allow_null=True
+        queryset=BusinessProcess.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    parent_control = serializers.PrimaryKeyRelatedField(
+        queryset=Control.objects.filter(control_level=ControlLevel.STANDARD),
+        required=False,
+        allow_null=True,
     )
     is_active = serializers.BooleanField(default=True, required=False)
 
@@ -103,6 +184,8 @@ class ControlCreateUpdateSerializer(serializers.ModelSerializer):
             "title",
             "description",
             "reference_doc",
+            "control_level",
+            "parent_control",
             "control_type",
             "control_nature",
             "control_frequency",

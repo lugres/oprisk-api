@@ -15,6 +15,7 @@ from controls.models import (
     ControlType,
     ControlNature,
     ControlFrequency,
+    ControlLevel,
 )
 from risks.models import Risk, RiskStatus, RiskCategory, RiskControl
 from references.models import BusinessUnit, BusinessProcess, Role
@@ -67,6 +68,10 @@ class ControlTestBase(TestCase):
         # --- Reference Data ---
         self.bu_finance, _ = BusinessUnit.objects.get_or_create(name="Finance")
         self.bu_it, _ = BusinessUnit.objects.get_or_create(name="IT")
+        self.bu_risk_mgmt, _ = BusinessUnit.objects.get_or_create(
+            name="Risk Management"
+        )
+
         self.process_ap = BusinessProcess.objects.create(
             name="Accounts Payable"
         )
@@ -75,6 +80,10 @@ class ControlTestBase(TestCase):
         # --- Users ---
         self.risk_officer = create_user(
             "ro@example.com", "passt123", self.role_ro, self.bu_finance
+        )
+        # Group/Central Risk Officer (can edit ALL)
+        self.group_risk_officer = create_user(
+            "gro@example.com", "passt123", self.role_ro, self.bu_risk_mgmt
         )
         self.manager = create_user(
             "mgr@example.com", "passt123", self.role_mgr, self.bu_finance
@@ -88,13 +97,36 @@ class ControlTestBase(TestCase):
         )
 
         # --- Controls (Seed Data) ---
-        self.control_active = Control.objects.create(
-            title="Dual Signature",
-            description="Checks > $10k require 2 signatures",
+
+        # STANDARD control (visible to all, editable by Group RO only)
+        self.standard_control = Control.objects.create(
+            title="Group Dual Signature Policy",
+            description=(
+                "Organization-wide policy: Checks > $10k require 2 signatures"
+            ),
             control_type=ControlType.PREVENTIVE,
             control_nature=ControlNature.MANUAL,
             control_frequency=ControlFrequency.AD_HOC,
             effectiveness=5,
+            control_level=ControlLevel.STANDARD,
+            business_unit=None,  # STANDARD has no BU
+            owner=self.group_risk_officer,
+            is_active=True,
+            created_by=self.group_risk_officer,
+        )
+
+        # LOCAL control in Finance (active)
+        self.control_active = Control.objects.create(
+            title="Finance Dual Signature",
+            description=(
+                "Finance implementation: Checks > $10k require 2 signatures"
+            ),
+            control_type=ControlType.PREVENTIVE,
+            control_nature=ControlNature.MANUAL,
+            control_frequency=ControlFrequency.AD_HOC,
+            control_level=ControlLevel.LOCAL,
+            parent_control=self.standard_control,
+            effectiveness=4,
             business_unit=self.bu_finance,
             business_process=self.process_ap,
             owner=self.manager,
@@ -102,10 +134,13 @@ class ControlTestBase(TestCase):
             created_by=self.risk_officer,
         )
 
+        # LOCAL control in Finance (inactive)
         self.control_inactive = Control.objects.create(
             title="Legacy Log",
             description="Deprecated manual log",
             control_type=ControlType.DETECTIVE,
+            control_level=ControlLevel.LOCAL,
+            parent_control=self.standard_control,
             business_unit=self.bu_finance,
             owner=self.manager,
             is_active=False,
@@ -137,15 +172,35 @@ class ControlCRUDTests(ControlTestBase):
     FR-1.5: Deactivate Control
     """
 
-    def test_create_control_as_risk_officer(self):
-        """Test Risk Officer can create a new control in the library."""
+    # First some checks for hierarchical control features.
+
+    def test_standard_control_has_no_parent(self):
+        """STANDARD controls should not have parents."""
+        self.assertIsNone(self.standard_control.parent_control)
+        self.assertIsNone(self.standard_control.business_unit)
+
+    def test_local_control_has_parent(self):
+        """LOCAL controls must have parent STANDARD control."""
+        self.assertEqual(
+            self.control_active.parent_control, self.standard_control
+        )
+        self.assertEqual(self.control_active.control_level, ControlLevel.LOCAL)
+
+    # Next CRUD
+
+    def test_create_local_control_as_bu_risk_officer(self):
+        """
+        Test BU Risk Officer can create a new LOCAL control in their BU.
+        """
         self.client.force_authenticate(user=self.risk_officer)
         payload = {
-            "title": "New Automated Recon",
+            "title": "New Finance Automated Recon",
             "description": "Daily auto-reconciliation of GL",
             "control_type": ControlType.DETECTIVE,
             "control_nature": ControlNature.AUTOMATED,
             "control_frequency": ControlFrequency.DAILY,
+            "control_level": ControlLevel.LOCAL,
+            "parent_control": self.standard_control.id,
             "effectiveness": 4,
             "business_unit": self.bu_finance.id,
             "owner": self.manager.id,
@@ -155,9 +210,73 @@ class ControlCRUDTests(ControlTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_201_CREATED)
         control = Control.objects.get(id=res.data["id"])
-        self.assertEqual(control.title, "New Automated Recon")
+        self.assertEqual(control.title, "New Finance Automated Recon")
+        self.assertEqual(control.control_level, ControlLevel.LOCAL)
+        self.assertEqual(control.business_unit, self.bu_finance)
         self.assertTrue(control.is_active)  # Default is active
         self.assertEqual(control.created_by, self.risk_officer)
+
+    def test_create_standard_control_as_group_risk_officer(self):
+        """Test Group Risk Officer can create STANDARD control."""
+        self.client.force_authenticate(user=self.group_risk_officer)
+        payload = {
+            "title": "New Standard Access Control",
+            "description": "Organization-wide access control policy",
+            "control_type": ControlType.PREVENTIVE,
+            "control_nature": ControlNature.AUTOMATED,
+            "control_frequency": ControlFrequency.CONTINUOUS,
+            "control_level": ControlLevel.STANDARD,
+            "effectiveness": 5,
+            "owner": self.group_risk_officer.id,
+            # No business_unit for STANDARD
+            # No parent_control for STANDARD
+        }
+        res = self.client.post(control_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        control = Control.objects.get(id=res.data["id"])
+        self.assertEqual(control.control_level, ControlLevel.STANDARD)
+        self.assertIsNone(control.business_unit)
+        self.assertIsNone(control.parent_control)
+
+    def test_bu_risk_officer_cannot_create_standard_control(self):
+        """Test BU Risk Officer cannot create STANDARD controls."""
+        self.client.force_authenticate(user=self.risk_officer)
+        payload = {
+            "title": "Unauthorized Standard",
+            "description": "BU RO trying to create STANDARD",
+            "control_type": ControlType.PREVENTIVE,
+            "control_frequency": ControlFrequency.DAILY,
+            "control_level": ControlLevel.STANDARD,
+            "owner": self.risk_officer.id,
+        }
+        res = self.client.post(control_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("Group Risk Officers", str(res.data))
+
+    def test_bu_risk_officer_cannot_create_local_in_other_bu(self):
+        """Test BU Risk Officer cannot create LOCAL control in another BU."""
+        self.client.force_authenticate(user=self.risk_officer)  # Finance RO
+        payload = {
+            "title": "Unauthorized IT Control",
+            "description": "Finance RO trying to create in IT",
+            "control_type": ControlType.PREVENTIVE,
+            "control_frequency": ControlFrequency.DAILY,
+            "control_level": ControlLevel.LOCAL,
+            "parent_control": self.standard_control.id,
+            "business_unit": self.bu_it.id,  # Different BU!
+            "owner": self.it_manager.id,
+        }
+        res = self.client.post(control_list_url(), payload)
+
+        # Should succeed but force their BU
+        # (or it could fail - depending on implementation)
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+        control = Control.objects.get(id=res.data["id"])
+        self.assertEqual(
+            control.business_unit, self.bu_finance
+        )  # Forced to Finance
 
     def test_create_control_without_required_fields_fails(self):
         """Test validation of required fields."""
@@ -171,6 +290,93 @@ class ControlCRUDTests(ControlTestBase):
         self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("description", str(res.data))
         self.assertIn("control_frequency", str(res.data))
+
+    def test_cannot_create_standard_with_parent(self):
+        """STANDARD controls cannot have parents - None auto-enforced."""
+        self.client.force_authenticate(user=self.group_risk_officer)
+        payload = {
+            "title": "Invalid Standard",
+            "description": "Standard with parent",
+            "control_type": ControlType.PREVENTIVE,
+            "control_frequency": ControlFrequency.DAILY,
+            "control_level": ControlLevel.STANDARD,
+            "parent_control": self.standard_control.id,  # Invalid!
+            "owner": self.group_risk_officer.id,
+        }
+        res = self.client.post(control_list_url(), payload)
+
+        # OK as STANDARD properties are enforced
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        # 'parent_control' set to None by 'create_standard_control' method
+        self.assertIn("parent_control", res.data)
+        self.assertIsNone(res.data["parent_control"])
+
+    def test_cannot_create_standard_with_business_unit(self):
+        """STANDARD controls cannot have business_unit - None auto-enforced."""
+        self.client.force_authenticate(user=self.group_risk_officer)
+        payload = {
+            "title": "Invalid Standard",
+            "description": "Standard with BU",
+            "control_type": ControlType.PREVENTIVE,
+            "control_frequency": ControlFrequency.DAILY,
+            "control_level": ControlLevel.STANDARD,
+            "business_unit": self.bu_finance.id,  # Invalid!
+            "owner": self.group_risk_officer.id,
+        }
+        res = self.client.post(control_list_url(), payload)
+
+        # OK as STANDARD properties are enforced
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        # 'business_unit' set to None by 'create_standard_control' method
+        self.assertIn("business_unit", res.data)
+        self.assertIsNone(res.data["business_unit"])
+
+    def test_cannot_create_local_without_business_unit_bu_ro(self):
+        """LOCAL controls must have business_unit - enforced for BU RO."""
+        self.client.force_authenticate(user=self.risk_officer)
+        payload = {
+            "title": "Invalid Local",
+            "description": "Local without BU",
+            "control_type": ControlType.PREVENTIVE,
+            "control_frequency": ControlFrequency.DAILY,
+            "control_level": ControlLevel.LOCAL,
+            "parent_control": self.standard_control.id,
+            "owner": self.manager.id,
+            # Missing business_unit!
+        }
+        res = self.client.post(control_list_url(), payload)
+
+        # OK as LOCAL properties are enforced for BU RO
+        self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+        # 'business_unit' set to BU RO by 'create_local_control' method
+        self.assertIn("business_unit", res.data)
+        self.assertIsNotNone(res.data["business_unit"])
+        self.assertEqual(
+            res.data["business_unit"], self.risk_officer.business_unit.id
+        )
+
+    def test_cannot_create_local_without_business_unit_group_ro(self):
+        """LOCAL controls must have business_unit."""
+        self.client.force_authenticate(user=self.group_risk_officer)
+        payload = {
+            "title": "Invalid Local",
+            "description": "Local without BU",
+            "control_type": ControlType.PREVENTIVE,
+            "control_frequency": ControlFrequency.DAILY,
+            "control_level": ControlLevel.LOCAL,
+            "parent_control": self.standard_control.id,
+            "owner": self.manager.id,
+            # Missing business_unit!
+        }
+        res = self.client.post(control_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn(
+            "business_unit is required for LOCAL controls", str(res.data)
+        )
 
     def test_effectiveness_out_of_range_fails(self):
         """Test effectiveness must be 1-5."""
@@ -213,8 +419,8 @@ class ControlCRUDTests(ControlTestBase):
         res = self.client.post(control_list_url(), payload)
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_update_control_as_risk_officer(self):
-        """Test Risk Officer can update control attributes."""
+    def test_update_local_control_as_bu_risk_officer(self):
+        """Test BU Risk Officer can update LOCAL control attrs in their BU."""
         self.client.force_authenticate(user=self.risk_officer)
         url = control_detail_url(self.control_active.id)
         res = self.client.patch(url, {"effectiveness": 3})
@@ -222,6 +428,30 @@ class ControlCRUDTests(ControlTestBase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.control_active.refresh_from_db()
         self.assertEqual(self.control_active.effectiveness, 3)
+
+    def test_bu_risk_officer_cannot_edit_standard_control(self):
+        """Test BU Risk Officer cannot edit STANDARD controls."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = control_detail_url(self.standard_control.id)
+        res = self.client.patch(url, {"effectiveness": 3})
+
+        self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_group_risk_officer_can_edit_any_control(self):
+        """
+        Test Group Risk Officer can edit both STANDARD and LOCAL controls.
+        """
+        self.client.force_authenticate(user=self.group_risk_officer)
+
+        # Edit STANDARD
+        url = control_detail_url(self.standard_control.id)
+        res = self.client.patch(url, {"effectiveness": 4})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Edit LOCAL
+        url = control_detail_url(self.control_active.id)
+        res = self.client.patch(url, {"effectiveness": 3})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
 
     def test_manager_cannot_edit_control(self):
         """Test Manager cannot edit controls (read-only access)."""
@@ -239,8 +469,8 @@ class ControlCRUDTests(ControlTestBase):
 
         self.assertEqual(res.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_deactivate_control(self):
-        """Test Risk Officer can deactivate a control (Soft Delete)."""
+    def test_deactivate_local_control_as_bu_risk_officer(self):
+        """Test BU Risk Officer can deactivate LOCAL control in their BU."""
         self.client.force_authenticate(user=self.risk_officer)
         url = control_detail_url(self.control_active.id)
         # We use PATCH to set is_active=False
@@ -249,6 +479,24 @@ class ControlCRUDTests(ControlTestBase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.control_active.refresh_from_db()
         self.assertFalse(self.control_active.is_active)
+
+    def test_cannot_modify_structural_fields(self):
+        """Test that structural fields cannot be modified after creation."""
+        self.client.force_authenticate(user=self.group_risk_officer)
+        url = control_detail_url(self.control_active.id)
+
+        # Try to change control_level
+        res = self.client.patch(url, {"control_level": ControlLevel.STANDARD})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("structural fields", str(res.data).lower())
+
+        # Try to change business_unit
+        res = self.client.patch(url, {"business_unit": self.bu_it.id})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Try to change parent_control
+        res = self.client.patch(url, {"parent_control": ""})
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_delete_control_fails_for_all(self):
         """Test DELETE method is strictly forbidden (use deactivation)."""
@@ -281,18 +529,26 @@ class ControlQuerysetTests(ControlTestBase):
 
         # --- Additional Data for Visibility Tests ---
 
-        # Control in IT BU (Different from test users' Finance BU)
+        # STANDARD control (visible to all)
+        # Already created in base: self.standard_control
+
+        # LOCAL Control in IT BU (Different from test users' Finance BU)
         self.control_it = Control.objects.create(
-            title="IT Firewall",
+            title="IT Firewall Implementation",
             control_type=ControlType.PREVENTIVE,
+            control_level=ControlLevel.LOCAL,
+            parent_control=self.standard_control,
             business_unit=self.bu_it,  # <-- IT BU
             owner=self.it_manager,
             created_by=self.risk_officer,
             is_active=True,
         )
+        # Another LOCAL IT control NOT linked to any risks
         self.control_it_not_linked = Control.objects.create(
-            title="IT Firewall",
-            control_type=ControlType.PREVENTIVE,
+            title="IT Backup Control",
+            control_type=ControlType.DETECTIVE,
+            control_level=ControlLevel.LOCAL,
+            parent_control=self.standard_control,
             business_unit=self.bu_it,  # <-- IT BU
             owner=self.it_manager,
             created_by=self.risk_officer,
@@ -303,7 +559,7 @@ class ControlQuerysetTests(ControlTestBase):
         # This tests the "View controls linked to risks they own" rule
         self.risk_cross_linked = Risk.objects.create(
             title="Finance App Risk",
-            description="Some description",
+            description="Finance risk linked to IT control",
             status=RiskStatus.ACTIVE,
             risk_category=self.category,
             business_unit=self.bu_finance,  # Finance BU
@@ -315,55 +571,66 @@ class ControlQuerysetTests(ControlTestBase):
             self.control_it, through_defaults={"linked_by": self.manager}
         )
 
-    def test_risk_officer_sees_all_controls_in_own_bu(self):
-        """Risk Officer sees both active and inactive controls in their BU."""
-        self.client.force_authenticate(user=self.risk_officer)
+    def test_bu_risk_officer_sees_standard_and_all_local_controls_in_bu(self):
+        """
+        BU Risk Officer sees all STD and active+inactive LOCAL controls in BU.
+        """
+        self.client.force_authenticate(user=self.risk_officer)  # Finance RO
         res = self.client.get(control_list_url())
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         ids = [c["id"] for c in res.data["results"]]
 
-        # Should see Finance controls
+        # Should see STANDARD (visible to all)
+        self.assertIn(self.standard_control.id, ids)
+
+        # Should see LOCAL controls in Finance (active and inactive)
         self.assertIn(self.control_active.id, ids)
         self.assertIn(self.control_inactive.id, ids)
 
-        # Should NOT see IT controls (unless linked to risks in BU)
-        # (unless linked? BRD implies BU scope for library management)
+        # Should see IT control linked to Finance risk
         self.assertIn(self.control_it.id, ids)
+
+        # Should NOT see unlinked IT control
         self.assertNotIn(self.control_it_not_linked.id, ids)
 
-    def test_manager_sees_only_active_controls_in_own_bu(self):
-        """Manager sees only active controls by default."""
+    def test_manager_sees_standards_plus_active_local_controls_in_bu(self):
+        """
+        Manager sees STANDARD + active LOCAL in their BU + linked controls.
+        """
         self.client.force_authenticate(user=self.manager)
         res = self.client.get(control_list_url())
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         ids = [c["id"] for c in res.data["results"]]
 
-        # See active Finance
+        # See STANDARD
+        self.assertIn(self.standard_control.id, ids)
+
+        # See active LOCAL in Finance
         self.assertIn(self.control_active.id, ids)
-        # No inactive
+
+        # No inactive LOCAL
         self.assertNotIn(self.control_inactive.id, ids)
 
-    def test_manager_sees_cross_bu_control_if_linked_to_owned_risk(self):
-        """Manager sees IT control because it is linked to a Risk they own."""
-        self.client.force_authenticate(user=self.manager)
-        res = self.client.get(control_list_url())
-
-        self.assertEqual(res.status_code, status.HTTP_200_OK)
-        ids = [c["id"] for c in res.data["results"]]
-
-        # Crucial assertion: Manager sees IT control due to linkage
+        # See IT control because linked to risk they own
         self.assertIn(self.control_it.id, ids)
 
-    def test_employee_sees_only_active_controls(self):
-        """Employee sees only active controls."""
+    def test_employee_sees_standards_plus_active_local_in_bu(self):
+        """Employee sees STANDARD + active LOCAL controls in their BU."""
         self.client.force_authenticate(user=self.employee)
         res = self.client.get(control_list_url())
 
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         ids = [c["id"] for c in res.data["results"]]
+
+        # See STANDARD
+        self.assertIn(self.standard_control.id, ids)
+
+        # See active LOCAL in Finance
         self.assertIn(self.control_active.id, ids)
+
+        # No inactive LOCAL
         self.assertNotIn(self.control_inactive.id, ids)
 
     def test_employee_sees_cross_bu_control_if_linked_to_bu_risk(self):
@@ -381,7 +648,9 @@ class ControlQuerysetTests(ControlTestBase):
         self.assertIn(self.control_it.id, ids)
 
     def test_employee_does_not_see_unlinked_other_bu_control(self):
-        """Employee does NOT see IT control if no link exists."""
+        """
+        Employee does NOT see LOCAL IT control from other BU if not linked.
+        """
         # Unlink the control first
         self.risk_cross_linked.controls.remove(self.control_it)
 
@@ -390,6 +659,25 @@ class ControlQuerysetTests(ControlTestBase):
 
         ids = [c["id"] for c in res.data["results"]]
         self.assertNotIn(self.control_it.id, ids)
+
+        # OR just check control_it_not_linked
+
+        # Should NOT see INITIALLY unlinked IT control
+        self.assertNotIn(self.control_it_not_linked.id, ids)
+
+    def test_standard_control_visible_across_all_bus(self):
+        """STANDARD controls are visible to all BUs."""
+        # Finance employee
+        self.client.force_authenticate(user=self.employee)
+        res = self.client.get(control_list_url())
+        ids = [c["id"] for c in res.data["results"]]
+        self.assertIn(self.standard_control.id, ids)
+
+        # IT manager
+        self.client.force_authenticate(user=self.it_manager)
+        res = self.client.get(control_list_url())
+        ids = [c["id"] for c in res.data["results"]]
+        self.assertIn(self.standard_control.id, ids)
 
 
 # --- Linking Tests (Integration with Risks) ---
@@ -422,8 +710,10 @@ class ControlValidationTests(ControlTestBase):
             linked_by=self.risk_officer,
         )
 
-    def test_cannot_deactivate_control_linked_to_active_risk(self):
-        """Test deactivation fails if control is used in an ACTIVE risk."""
+    def test_cannot_deactivate_local_control_linked_to_active_risk(self):
+        """
+        Test deactivation fails if LOCAL control is linked to ACTIVE risk.
+        """
         self.client.force_authenticate(user=self.risk_officer)
         url = control_detail_url(self.control_active.id)
 
@@ -437,7 +727,7 @@ class ControlValidationTests(ControlTestBase):
         self.control_active.refresh_from_db()
         self.assertTrue(self.control_active.is_active)
 
-    def test_can_update_description_of_linked_control(self):
+    def test_can_update_description_of_linked_local_control(self):
         """Test non-structural updates (description) allowed even if linked."""
         self.client.force_authenticate(user=self.risk_officer)
         url = control_detail_url(self.control_active.id)
@@ -447,6 +737,24 @@ class ControlValidationTests(ControlTestBase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.control_active.refresh_from_db()
         self.assertEqual(self.control_active.description, "Updated text")
+
+    def test_local_control_must_have_parent(self):
+        """Test that LOCAL control creation fails without parent."""
+        self.client.force_authenticate(user=self.risk_officer)
+        payload = {
+            "title": "Invalid Local Control",
+            "description": "Missing parent",
+            "control_type": ControlType.PREVENTIVE,
+            "control_frequency": ControlFrequency.DAILY,
+            "control_level": ControlLevel.LOCAL,
+            "business_unit": self.bu_finance.id,
+            "owner": self.manager.id,
+            # Missing parent_control!
+        }
+        res = self.client.post(control_list_url(), payload)
+
+        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("parent", str(res.data).lower())
 
 
 # --- Filter & Search Tests ---
@@ -484,6 +792,24 @@ class ControlFilterTests(ControlTestBase):
         self.assertIn(self.control_active.id, ids)
         self.assertNotIn(ctrl_it.id, ids)
 
+    def test_filter_by_control_level(self):
+        """Test filtering by control_level."""
+        self.client.force_authenticate(user=self.group_risk_officer)
+
+        # Filter for STANDARD
+        url = f"{control_list_url()}?control_level=STANDARD"
+        res = self.client.get(url)
+        ids = [c["id"] for c in res.data["results"]]
+        self.assertIn(self.standard_control.id, ids)
+        self.assertNotIn(self.control_active.id, ids)
+
+        # Filter for LOCAL
+        url = f"{control_list_url()}?control_level=LOCAL"
+        res = self.client.get(url)
+        ids = [c["id"] for c in res.data["results"]]
+        self.assertNotIn(self.standard_control.id, ids)
+        self.assertIn(self.control_active.id, ids)
+
     def test_search_by_text(self):
         self.client.force_authenticate(user=self.risk_officer)
         url = f"{control_list_url()}?search=Signature"
@@ -512,8 +838,8 @@ class ControlResponseFormatTests(ControlTestBase):
             created_by=self.manager,
         )
 
-    def test_response_includes_permissions_for_risk_officer(self):
-        """Risk Officer should see can_edit=True."""
+    def test_response_includes_permissions_for_bu_risk_officer(self):
+        """BU Risk Officer should see can_edit=True for LOCAL control in BU."""
         self.client.force_authenticate(user=self.risk_officer)
         url = control_detail_url(self.control_active.id)
         res = self.client.get(url)
@@ -523,8 +849,32 @@ class ControlResponseFormatTests(ControlTestBase):
         self.assertTrue(res.data["permissions"]["can_edit"])
         self.assertTrue(res.data["permissions"]["can_deactivate"])
 
+    def test_bu_risk_officer_cannot_edit_standard(self):
+        """BU Risk Officer should see can_edit=False for STANDARD controls."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = control_detail_url(self.standard_control.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertFalse(res.data["permissions"]["can_edit"])
+        self.assertFalse(res.data["permissions"]["can_deactivate"])
+
+    def test_response_includes_permissions_for_group_risk_officer(self):
+        """Group Risk Officer should see can_edit=True for all controls."""
+        self.client.force_authenticate(user=self.group_risk_officer)
+
+        # Check STANDARD control
+        url = control_detail_url(self.standard_control.id)
+        res = self.client.get(url)
+        self.assertTrue(res.data["permissions"]["can_edit"])
+
+        # Check LOCAL control
+        url = control_detail_url(self.control_active.id)
+        res = self.client.get(url)
+        self.assertTrue(res.data["permissions"]["can_edit"])
+
     def test_response_includes_permissions_for_manager(self):
-        """Manager should see can_edit=False."""
+        """Manager should see can_edit=False for active LOCAL in BU."""
         self.client.force_authenticate(user=self.manager)
         url = control_detail_url(self.control_active.id)
         res = self.client.get(url)
@@ -534,7 +884,7 @@ class ControlResponseFormatTests(ControlTestBase):
         self.assertFalse(res.data["permissions"]["can_edit"])
         self.assertFalse(res.data["permissions"]["can_deactivate"])
 
-    def test_can_deactivate_is_false_when_linked_to_active_risk(self):
+    def test_can_deactivate_is_false_when_local_linked_to_active_risk(self):
         """
         Test permission logic reflects business rules (blocking deactivation).
         """
@@ -573,3 +923,38 @@ class ControlResponseFormatTests(ControlTestBase):
         self.assertEqual(res.status_code, status.HTTP_200_OK)
         self.assertEqual(res.data["linked_risks_count"], 2)
         self.assertEqual(res.data["active_risks_count"], 1)
+
+    def test_detail_response_includes_hierarchy_info(self):
+        """Detail response includes parent, children, and inheritance chain."""
+        self.client.force_authenticate(user=self.risk_officer)
+        url = control_detail_url(self.control_active.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+        # Has parent info
+        self.assertIn("parent_control", res.data)
+        self.assertIsNotNone(res.data["parent_control"])
+        self.assertEqual(
+            res.data["parent_control"]["id"], self.standard_control.id
+        )
+
+        # Has inheritance chain
+        self.assertIn("inheritance_chain", res.data)
+        self.assertEqual(len(res.data["inheritance_chain"]), 2)
+        self.assertEqual(res.data["inheritance_chain"][0]["level"], "STANDARD")
+        self.assertEqual(res.data["inheritance_chain"][1]["level"], "LOCAL")
+
+    def test_standard_control_shows_children(self):
+        """STANDARD control shows its LOCAL implementations."""
+        self.client.force_authenticate(user=self.group_risk_officer)
+        url = control_detail_url(self.standard_control.id)
+        res = self.client.get(url)
+
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertIn("child_controls", res.data)
+
+        # Should have at least 2 children (control_active, control_inactive)
+        # Note: control_inactive might not appear if filter is active=True
+        child_ids = [c["id"] for c in res.data["child_controls"]]
+        self.assertIn(self.control_active.id, child_ids)

@@ -8,8 +8,9 @@ from rest_framework.authentication import TokenAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 
-from .models import Control
+from .models import Control, ControlLevel
 from . import serializers, services, filters
 from .workflows import ControlPermissionError, ControlValidationError
 
@@ -71,7 +72,10 @@ class ControlViewSet(viewsets.ModelViewSet):
         queryset = (
             super()
             .get_queryset()
-            .select_related("business_unit", "owner", "created_by")
+            .select_related(
+                "business_unit", "owner", "created_by", "parent_control"
+            )
+            .prefetch_related("child_controls")
         )
 
         # Apply visibility rules from service layer
@@ -100,13 +104,24 @@ class ControlViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         """
         Create a new control.
+        Dispatcher: Routes to create_standard or create_local based on input.
         """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        data = serializer.validated_data
+        level = data.get("control_level")
+
         try:
-            control = services.create_control(
-                user=request.user, **serializer.validated_data
-            )
+            if level == ControlLevel.STANDARD:
+                control = services.create_standard_control(
+                    user=request.user, **data
+                )
+            else:
+                # Default to LOCAL if not specified, or explicit LOCAL
+                control = services.create_local_control(
+                    user=request.user, **data
+                )
             return Response(
                 self._get_response_serializer(control).data,
                 status=status.HTTP_201_CREATED,
@@ -114,6 +129,11 @@ class ControlViewSet(viewsets.ModelViewSet):
         except ControlPermissionError as e:
             return Response(
                 {"error": str(e)}, status=status.HTTP_403_FORBIDDEN
+            )
+        except (ControlValidationError, ValidationError) as e:
+            # ValidationError can come from model.full_clean()
+            return Response(
+                {"error": str(e)}, status=status.HTTP_400_BAD_REQUEST
             )
 
     def update(self, request, *args, **kwargs):

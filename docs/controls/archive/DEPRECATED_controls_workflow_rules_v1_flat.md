@@ -1,3 +1,22 @@
+# ⚠️ DEPRECATED - Controls Workflow Rules (Flat Model)
+
+**Status:** DEPRECATED - Historical Reference Only  
+**Superseded By:** [controls_workflow_rules.md](../controls_workflow_rules.md)  
+**Date Deprecated:** December 30, 2025  
+**Reason:** System refactored to hierarchical control model (STANDARD/LOCAL)
+
+---
+
+**DO NOT USE THIS DOCUMENT FOR CURRENT IMPLEMENTATION**
+
+This document is preserved for historical reference only. It describes the original flat control model that was superseded by the hierarchical model in v2.0.5.
+
+For current specifications, see:
+- [controls_workflow_rules.md](../controls_workflow_rules.md) - Current business rules
+- [CHANGELOG.md](../../../CHANGELOG.md) - What changed and why
+
+---
+
 # Controls Workflow & Business Rules
 
 This document defines the business logic and lifecycle rules for the **Controls** module. Unlike Risks or Incidents, Controls do not follow a complex state machine; they function as a **Library** of reusable assets.

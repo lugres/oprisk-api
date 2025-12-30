@@ -1,3 +1,22 @@
+# ⚠️ DEPRECATED - Controls Contracts (Flat Model)
+
+**Status:** DEPRECATED - Historical Reference Only  
+**Superseded By:** [controls_api_contracts.md](../controls_api_contracts.md)  
+**Date Deprecated:** December 30, 2025  
+**Reason:** System refactored to hierarchical control model (STANDARD/LOCAL)
+
+---
+
+**DO NOT USE THIS DOCUMENT FOR CURRENT IMPLEMENTATION**
+
+This document is preserved for historical reference only. It describes the original flat control model that was superseded by the hierarchical model in v2.0.5.
+
+For current specifications, see:
+- [controls_workflow_rules.md](../controls_api_contracts.md) - Current API contracts
+- [CHANGELOG.md](../../../CHANGELOG.md) - What changed and why
+
+---
+
 # Controls API Contracts
 
 This document outlines the API contracts for the **Controls (Mitigation)** module. These endpoints manage the central library of controls. Note that linking controls to risks is handled via the **Risks API**.
