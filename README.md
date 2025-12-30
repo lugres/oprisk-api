@@ -53,11 +53,11 @@ The Risks module implements a robust **Risk and Control Self-Assessment (RCSA)**
 
 ### 🛡️ Controls Module
 
-This module serves as a centralized repository for the organization's defense mechanisms. It is built on a "Library" architecture rather than a transactional workflow, focusing on reusability and standardization.
-* **Centralized Library**: A single source of truth for preventive, detective, and corrective controls, avoiding duplication across business units.
-* **Segregation of Duties**: Only **Risk Officers** can create or modify the library, while **Managers** consume controls to mitigate their specific risks.
-* **Integrity Logic**: Enforces strict dependency rules—controls cannot be deactivated or deleted if they are currently linked to any active risks.
-* **Integration**: Provides the foundational "Defense" layer for the RCSA process, allowing controls to be linked to Risks with specific mitigation notes.
+This module serves as a centralized repository for the organization's defense mechanisms. It is built on a **hierarchical architecture** with STANDARD controls (organization-wide policies) and LOCAL controls (business unit implementations), focusing on reusability and standardization.
+* **Centralized Library**: STANDARD controls provide organization-wide policy definitions, while LOCAL controls implement these standards in specific business unit contexts (preventive, detective, and corrective controls), avoiding duplication and ensuring consistency.
+* **Governance Model**: **Group Risk Officers** manage STANDARD controls visible across all business units, while **BU Risk Officers** create LOCAL implementations within their units, inheriting from STANDARD parents.
+* **Integrity Logic**: Enforces hierarchical validation (LOCAL controls must reference STANDARD parents) and dependency rules—controls cannot be deactivated or deleted if linked to active risks. Only LOCAL controls can be linked to risks.
+* **Integration**: Provides the foundational "Defense" layer for the RCSA process, allowing LOCAL controls to be linked to Risks with specific mitigation notes.
 
 ## Key Technical Features - Incidents Module
 
@@ -76,6 +76,34 @@ This project strictly follows a 3-layer architectural pattern to manage complexi
 1.  **Interface Layer (Views):** Thin `ViewSet` is responsible for HTTP handling, authentication, and permission checks.
 2.  **Application Layer (Services):** Orchestrates business tasks. This is where multiple components are coordinated (e.g., "submit an incident" means *validating fields*, *running workflow*, *setting SLA*, and *assigning a user*).
 3.  **Domain Layer (Workflow):** Pure, isolated Python modules that contain the core business rules (e.g., `is_transition_allowed?`).
+
+
+**Schema of the Current Design :**
+
+┌─────────────────────────────────────────────────┐
+│ workflows.py (Domain Layer)                     │
+│ - Pure business logic                           │
+│ - No Django imports                             │
+│ - Operates on primitives (str, int, bool)       │
+│ - No side effects, no exceptions (ideally)      │
+└─────────────────────────────────────────────────┘
+                    ▲
+                    │
+┌─────────────────────────────────────────────────┐
+│ services.py (Application Layer)                 │
+│ - Django-aware orchestrator                     │
+│ - Calls domain layer for validation             │
+│ - Handles transactions, ORM queries             │
+│ - Raises application exceptions                 │
+└─────────────────────────────────────────────────┘
+                    ▲
+                    │
+┌─────────────────────────────────────────────────┐
+│ views.py/serializers.py (Interface Layer)       │
+│ - HTTP request/response, serialization          │
+│ - Calls services in try/except blocks           │
+│ - Converts exceptions to HTTP responses         │
+└─────────────────────────────────────────────────┘
 
 This separation ensures that complex business logic is not coupled to the Django framework or the HTTP interface, making it highly maintainable and testable.
 
