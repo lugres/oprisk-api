@@ -100,25 +100,25 @@ For a deeper dive into the system's design and business rules, please see the fo
 
 ### Documentation - Incidents module
 
-* **[Incidents Workflow Rules](./docs/incident_workflow_rules.md)**: A complete specification of the incident state machine, SLA logic, and dynamic field rules.
-* **[Incidents API Contracts](./docs/incident_api_contracts.md)**: High-level documentation for the main Incidents API endpoints and workflow actions.
-* **[Business Requirements Document (BRD) for the Incidents module](./docs/business_requirements_documents/incidents_design_specs_detailed.md)**: Describes functional, technical, and architectural requirements for the Incidents module, as well as an analysis of some architectural options considered.
+* **[Incidents Workflow Rules](./docs/incidents/incident_workflow_rules.md)**: A complete specification of the incident state machine, SLA logic, and dynamic field rules.
+* **[Incidents API Contracts](./docs/incidents/incident_api_contracts.md)**: High-level documentation for the main Incidents API endpoints and workflow actions.
+* **[Business Requirements Document (BRD) for the Incidents module](./docs/incidents/brd/incidents_design_specs_detailed.md)**: Describes functional, technical, and architectural requirements for the Incidents module, as well as an analysis of some architectural options considered.
 
 ### Documentation - Measures module
 
-* **[Measures Workflow Rules](./docs/measure_workflow_rules.md)**: A complete specification of the measure state machine, SLA logic, and dynamic field rules.
-* **[Measures API Contracts](./docs/measure_api_contracts.md)**: High-level documentation for the main Measures API endpoints and workflow actions.
-* **[Architecture Decision Record (ADR) document for permission enforcement strategy in Measures](./docs/architectural_decision_records/001_adr_measures_permissions.md)**: Outlines how a robust permission enforcement mechanism is implemented in the Measures module within Service-Layer Gateway Pattern, and explains why DRF-native permission classes were not used.
+* **[Measures Workflow Rules](./docs/measures/measure_workflow_rules.md)**: A complete specification of the measure state machine, SLA logic, and dynamic field rules.
+* **[Measures API Contracts](./docs/measures/measure_api_contracts.md)**: High-level documentation for the main Measures API endpoints and workflow actions.
+* **[Architecture Decision Record (ADR) document for permission enforcement strategy in Measures](./docs/measures/adr/001_adr_measures_permissions.md)**: Outlines how a robust permission enforcement mechanism is implemented in the Measures module within Service-Layer Gateway Pattern, and explains why DRF-native permission classes were not used.
 
 ### Documentation - Risks module
 
-* **[Risks Workflow Rules](./docs/risks_workflow_rules.md)**: A complete specification of the risk state machine, SLA logic, and dynamic field rules.
-* **[Risks API Contracts](./docs/risks_api_contracts.md)**: High-level documentation for the main Risks API endpoints and workflow actions.
-* **[Business Requirements Document (BRD) for the Risks module](./docs/business_requirements_documents/risk_workflow_design_specs.md)**: Presents an analysis of different options considered for a Risk workflow model, and explains what was finally selected and why.
+* **[Risks Workflow Rules](./docs/risks/risks_workflow_rules.md)**: A complete specification of the risk state machine, SLA logic, and dynamic field rules.
+* **[Risks API Contracts](./docs/risks/risks_api_contracts.md)**: High-level documentation for the main Risks API endpoints and workflow actions.
+* **[Business Requirements Document (BRD) for the Risks module](./docs/risks/brd/risk_workflow_design_specs.md)**: Presents an analysis of different options considered for a Risk workflow model, and explains what was finally selected and why.
 
 ### Documentation - Controls module
 
-* **[Controls Workflow Rules](./docs/controls_workflow_rules.md)**: A complete specification of the business logic and lifecycle rules for controls (no state machine - a library of assets).
-* **[Controls API Contracts](./docs/controls_api_contracts.md)**: High-level documentation for the main Controls API endpoints (linking is in Risks).
-* **[Business Requirements Document (BRD) for the Controls module, detailed analysis](./docs/business_requirements_documents/controls_design_specs_detailed.md)**: Presents an analysis of different options considered for the Controls app, including code organization, workflows, data models, and explains what was finally selected and why.
-* **[Business Requirements Document (BRD) for the Controls module, Executive Summary](./docs/business_requirements_documents/controls_design_specs_exec_summary.md)**: Presents a clear development path to follow for the Controls app; based on the detailed analysis of pros and cons in the previous BRD.
+* **[Controls Workflow Rules](./docs/controls/controls_workflow_rules.md)**: A complete specification of the business logic and lifecycle rules for controls (no state machine - a library of assets).
+* **[Controls API Contracts](./docs/controls/controls_api_contracts.md)**: High-level documentation for the main Controls API endpoints (linking is in Risks).
+* **[Business Requirements Document (BRD) for the Controls module, detailed analysis](./docs/controls/brd/controls_design_specs_detailed.md)**: Presents an analysis of different options considered for the Controls app, including code organization, workflows, data models, and explains what was finally selected and why.
+* **[Business Requirements Document (BRD) for the Controls module, Executive Summary](./docs/controls/brd/controls_design_specs_exec_summary.md)**: Presents a clear development path to follow for the Controls app; based on the detailed analysis of pros and cons in the previous BRD.
