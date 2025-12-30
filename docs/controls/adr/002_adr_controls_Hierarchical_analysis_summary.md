@@ -1,5 +1,9 @@
 # "OOP/Hierarchical" Model - brief summary
 
+> **📌 IMPLEMENTATION STATUS:**  
+> The hierarchical model described in this ADR has been **implemented** as of December 30, 2025.  
+> See [CHANGELOG.md](../../../CHANGELOG.md) for implementation details and current behavior.
+
 **"OOP/Hierarchical"** proposal addresses the specific reality of small/medium European banks where "Risk Officer" is often a "hat" worn by a business manager, not a dedicated profession.
 
 Here is the deep analysis of proposed **Hierarchical (Parent-Child)** approach compared to the previous options.
