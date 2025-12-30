@@ -79,7 +79,7 @@ This project strictly follows a 3-layer architectural pattern to manage complexi
 
 
 **Schema of the Current Design :**
-
+```
 ┌─────────────────────────────────────────────────┐
 │ workflows.py (Domain Layer)                     │
 │ - Pure business logic                           │
@@ -104,6 +104,7 @@ This project strictly follows a 3-layer architectural pattern to manage complexi
 │ - Calls services in try/except blocks           │
 │ - Converts exceptions to HTTP responses         │
 └─────────────────────────────────────────────────┘
+```
 
 This separation ensures that complex business logic is not coupled to the Django framework or the HTTP interface, making it highly maintainable and testable.
 
@@ -120,10 +121,11 @@ This project is a monolithic Django application, containerized with Docker, and 
 | **Deployment** | Docker | Containerized for consistent development, testing, and production environments. |
 | **CI/CD** | GitHub Actions | For automated linting and running the test suite on every push. |
 
-## Documentation
+## 📚 Documentation
 
 For a deeper dive into the system's design and business rules, please see the following documents:
 
+- **[Changelog](CHANGELOG.md)** - Version history, breaking changes, and migration guides.
 * **[Project Architecture (explained based on Incidents module)](./docs/architecture.md)**: A detailed breakdown of the 3-layer architectural pattern, permission models, and notification system.
 
 ### Documentation - Incidents module
